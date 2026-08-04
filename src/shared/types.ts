@@ -1,0 +1,288 @@
+import { z } from 'zod';
+
+export const ProviderIdSchema = z.enum([
+  'deepseek',
+  'glm',
+  'kimi',
+  'openrouter',
+  'ollama',
+]);
+export type ProviderId = z.infer<typeof ProviderIdSchema>;
+
+export const MessageRoleSchema = z.enum(['system', 'user', 'assistant']);
+export type MessageRole = z.infer<typeof MessageRoleSchema>;
+
+export const ErrorCodeSchema = z.enum([
+  'RATE_LIMIT',
+  'INSUFFICIENT_BALANCE',
+  'CONTEXT_LENGTH_EXCEEDED',
+  'INVALID_API_KEY',
+  'MODEL_NOT_FOUND',
+  'UPSTREAM_TIMEOUT',
+  'UNKNOWN',
+]);
+export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
+
+export const ArtifactKindSchema = z.enum(['markdown', 'code', 'svg', 'mermaid']);
+export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
+
+export const ArtifactSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
+
+export const ArtifactVersionSchema = z.object({
+  version: z.number().int().positive(),
+  content: z.string(),
+  operation: z.enum(['create', 'rewrite', 'update']),
+  messageId: z.string().nullable(),
+  outputTokens: z.number().int().nonnegative().nullable(),
+  costUsd: z.number().nonnegative().nullable(),
+  truncated: z.boolean(),
+  createdAt: z.number().int().nonnegative(),
+});
+export type ArtifactVersion = z.infer<typeof ArtifactVersionSchema>;
+
+export const ArtifactSchema = z.object({
+  id: z.string().min(1),
+  conversationId: z.string().min(1),
+  slug: ArtifactSlugSchema,
+  kind: ArtifactKindSchema,
+  language: z.string().max(32).nullable(),
+  title: z.string().min(1).max(120),
+  currentVersion: z.number().int().positive(),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+  versions: z.array(ArtifactVersionSchema),
+});
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
+export const UsageSchema = z.object({
+  promptTokens: z.number().int().nonnegative(),
+  cachedTokens: z.number().int().nonnegative(),
+  completionTokens: z.number().int().nonnegative(),
+  reasoningTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  estimated: z.boolean(),
+});
+export type Usage = z.infer<typeof UsageSchema>;
+
+export const CostSchema = z.object({
+  usd: z.number().nonnegative().nullable(),
+  estimated: z.boolean(),
+  pricingAvailable: z.boolean(),
+});
+export type Cost = z.infer<typeof CostSchema>;
+
+export const ApiErrorSchema = z.object({
+  code: ErrorCodeSchema,
+  message: z.string(),
+  retryable: z.boolean(),
+});
+export type ApiError = z.infer<typeof ApiErrorSchema>;
+
+const SseBaseSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  messageId: z.string().min(1).optional(),
+});
+
+export const SseTextSchema = SseBaseSchema.extend({
+  type: z.literal('text'),
+  text: z.string(),
+});
+
+export const SseReasoningSchema = SseBaseSchema.extend({
+  type: z.literal('reasoning'),
+  reasoning: z.string(),
+});
+
+export const SseUsageSchema = SseBaseSchema.extend({
+  type: z.literal('usage'),
+  usage: UsageSchema,
+  cost: CostSchema,
+});
+
+export const SseErrorSchema = SseBaseSchema.extend({
+  type: z.literal('error'),
+  error: ApiErrorSchema,
+});
+
+export const SseDoneSchema = SseBaseSchema.extend({
+  type: z.literal('done'),
+  done: z.literal(true),
+  finishReason: z.string().optional(),
+  truncated: z.boolean().optional(),
+  usage: UsageSchema.optional(),
+  cost: CostSchema.optional(),
+});
+
+export const SseArtifactStartSchema = SseBaseSchema.extend({
+  type: z.literal('artifact_start'),
+  slug: ArtifactSlugSchema,
+  kind: ArtifactKindSchema,
+  language: z.string().max(32).nullable(),
+  title: z.string().min(1).max(120),
+  version: z.number().int().positive(),
+  operation: z.enum(['create', 'rewrite', 'update']),
+});
+
+export const SseArtifactDeltaSchema = SseBaseSchema.extend({
+  type: z.literal('artifact_delta'),
+  slug: ArtifactSlugSchema,
+  text: z.string(),
+});
+
+export const SseArtifactEndSchema = SseBaseSchema.extend({
+  type: z.literal('artifact_end'),
+  slug: ArtifactSlugSchema,
+  version: z.number().int().positive(),
+  truncated: z.boolean(),
+  outputTokens: z.number().int().nonnegative().nullable(),
+  costUsd: z.number().nonnegative().nullable(),
+});
+
+export const SseEnvelopeSchema = z.discriminatedUnion('type', [
+  SseTextSchema,
+  SseReasoningSchema,
+  SseUsageSchema,
+  SseErrorSchema,
+  SseDoneSchema,
+  SseArtifactStartSchema,
+  SseArtifactDeltaSchema,
+  SseArtifactEndSchema,
+]);
+export type SseEnvelope = z.infer<typeof SseEnvelopeSchema>;
+
+export const ModelPricingSchema = z.object({
+  inputPerMillion: z.number().nonnegative().nullable(),
+  cachedInputPerMillion: z.number().nonnegative().nullable().optional(),
+  outputPerMillion: z.number().nonnegative().nullable(),
+});
+export type ModelPricing = z.infer<typeof ModelPricingSchema>;
+
+export const ModelCatalogItemSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  contextWindow: z.number().int().positive(),
+  reasoning: z.boolean(),
+  pricing: ModelPricingSchema,
+});
+export type ModelCatalogItem = z.infer<typeof ModelCatalogItemSchema>;
+
+export const ProviderCatalogSchema = z.object({
+  id: ProviderIdSchema,
+  label: z.string().min(1),
+  configured: z.boolean(),
+  verifiedAt: z.string(),
+  stale: z.boolean(),
+  models: z.array(ModelCatalogItemSchema),
+});
+export type ProviderCatalog = z.infer<typeof ProviderCatalogSchema>;
+
+export const ModelsResponseSchema = z.object({
+  providers: z.array(ProviderCatalogSchema),
+  defaultProviderId: ProviderIdSchema,
+  defaultModelId: z.string().min(1),
+});
+export type ModelsResponse = z.infer<typeof ModelsResponseSchema>;
+
+export const ChatRequestSchema = z.object({
+  conversationId: z.string().min(1).nullable().optional(),
+  content: z.string().trim().min(1, 'A mensagem não pode ficar vazia.').max(200_000),
+  providerId: ProviderIdSchema,
+  modelId: z.string().trim().min(1).max(200),
+  temperature: z.number().min(0).max(2).optional(),
+});
+export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+
+export const CreateConversationSchema = z.object({
+  title: z.string().trim().min(1).max(200).nullable().optional(),
+  providerId: ProviderIdSchema.optional(),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  systemPrompt: z.string().max(100_000).nullable().optional(),
+});
+export type CreateConversationInput = z.infer<typeof CreateConversationSchema>;
+
+export const UpdateConversationSchema = z.object({
+  title: z.string().trim().min(1).max(200).nullable().optional(),
+  providerId: ProviderIdSchema.optional(),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  systemPrompt: z.string().max(100_000).nullable().optional(),
+  archived: z.boolean().optional(),
+});
+export type UpdateConversationInput = z.infer<typeof UpdateConversationSchema>;
+
+export const MessageSchema = z.object({
+  id: z.string().min(1),
+  conversationId: z.string().min(1),
+  role: MessageRoleSchema,
+  content: z.string(),
+  reasoning: z.string().nullable(),
+  providerId: ProviderIdSchema.nullable(),
+  modelId: z.string().nullable(),
+  usage: UsageSchema.nullable(),
+  cost: CostSchema.nullable(),
+  finishReason: z.string().nullable(),
+  errorCode: ErrorCodeSchema.nullable(),
+  createdAt: z.number().int().nonnegative(),
+  latencyMs: z.number().int().nonnegative().nullable(),
+});
+export type Message = z.infer<typeof MessageSchema>;
+
+export const ConversationSummarySchema = z.object({
+  id: z.string().min(1),
+  title: z.string().nullable(),
+  providerId: ProviderIdSchema,
+  modelId: z.string(),
+  systemPrompt: z.string().nullable(),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+  archived: z.boolean(),
+  messageCount: z.number().int().nonnegative(),
+  totalCostUsd: z.number().nonnegative(),
+});
+export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
+
+export const ConversationSchema = ConversationSummarySchema.extend({
+  messages: z.array(MessageSchema),
+});
+export type Conversation = z.infer<typeof ConversationSchema>;
+
+export const ConversationsResponseSchema = z.object({
+  conversations: z.array(ConversationSummarySchema),
+});
+export type ConversationsResponse = z.infer<typeof ConversationsResponseSchema>;
+
+export const ConversationResponseSchema = z.object({
+  conversation: ConversationSchema,
+});
+export type ConversationResponse = z.infer<typeof ConversationResponseSchema>;
+
+export const SearchResponseSchema = z.object({
+  results: z.array(ConversationSummarySchema),
+});
+export type SearchResponse = z.infer<typeof SearchResponseSchema>;
+
+export const DeleteResponseSchema = z.object({
+  ok: z.literal(true),
+});
+export type DeleteResponse = z.infer<typeof DeleteResponseSchema>;
+
+export const CostDailyAggregateSchema = z.object({
+  day: z.string().min(1),
+  costUsd: z.number().nonnegative(),
+  messageCount: z.number().int().nonnegative(),
+});
+export type CostDailyAggregate = z.infer<typeof CostDailyAggregateSchema>;
+
+export const CostModelAggregateSchema = z.object({
+  providerId: ProviderIdSchema,
+  modelId: z.string().min(1),
+  costUsd: z.number().nonnegative(),
+  messageCount: z.number().int().nonnegative(),
+});
+export type CostModelAggregate = z.infer<typeof CostModelAggregateSchema>;
+
+export const CostAnalyticsResponseSchema = z.object({
+  totalCostUsd: z.number().nonnegative(),
+  daily: z.array(CostDailyAggregateSchema),
+  byModel: z.array(CostModelAggregateSchema),
+});
+export type CostAnalyticsResponse = z.infer<typeof CostAnalyticsResponseSchema>;

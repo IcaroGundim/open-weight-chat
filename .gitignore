@@ -1,0 +1,11 @@
+node_modules/
+dist/
+chat.db
+chat.db-shm
+chat.db-wal
+.env
+*.log
+
+# ferramentas locais de agente, fora do repositorio publico
+.commandcode/
+.claude/
