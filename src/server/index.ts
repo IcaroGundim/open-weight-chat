@@ -820,7 +820,17 @@ export function startServer(): ReturnType<typeof serve> {
   return serve({ fetch: app.fetch, port, hostname });
 }
 
-const entrypoint = process.argv[1] ? fileURLToPath(import.meta.url) === resolve(process.argv[1]) : false;
+const modulePath = fileURLToPath(import.meta.url);
+const entrypoint = process.argv
+  .slice(1)
+  .filter((argument) => !argument.startsWith('-'))
+  .some((argument) => {
+    try {
+      return resolve(argument) === modulePath;
+    } catch {
+      return false;
+    }
+  });
 if (entrypoint) {
   startServer();
   console.log(`Backend ouvindo em http://${process.env.HOST ?? 'localhost'}:${process.env.PORT ?? 8787}`);
