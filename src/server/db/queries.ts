@@ -103,7 +103,39 @@ CREATE TRIGGER IF NOT EXISTS artifact_versions_au AFTER UPDATE OF content ON art
   INSERT INTO artifact_versions_fts(artifact_versions_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO artifact_versions_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+CREATE TABLE IF NOT EXISTS provider_settings (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  models_json TEXT NOT NULL,
+  verified_at TEXT,
+  api_key_cipher TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
+
+export interface ProviderSettingsRecord {
+  id: string;
+  label: string;
+  baseURL: string;
+  models: unknown[];
+  verifiedAt: string | null;
+  /** Sempre cifrado. Nunca sai desta camada em claro. */
+  apiKeyCipher: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertProviderSettingsData {
+  id: string;
+  label: string;
+  baseURL: string;
+  models: unknown[];
+  verifiedAt?: string | null;
+  /** undefined mantém a chave atual; null apaga; string grava a nova. */
+  apiKeyCipher?: string | null;
+}
 
 export interface CreateConversationData {
   id?: string;
@@ -663,6 +695,71 @@ export class ChatDatabase {
       )
       .run(outputTokens, costUsd, conversationId, slug, version);
     return asNumber(result.changes) > 0;
+  }
+
+  listProviderSettings(): ProviderSettingsRecord[] {
+    return this.db
+      .prepare('SELECT * FROM provider_settings ORDER BY label ASC, id ASC')
+      .all()
+      .flatMap((row) => {
+        let models: unknown;
+        try {
+          models = JSON.parse(asString(row.models_json)) as unknown;
+        } catch {
+          // Registro corrompido não derruba o catálogo: ele some da lista.
+          return [];
+        }
+        return [{
+          id: asString(row.id),
+          label: asString(row.label),
+          baseURL: asString(row.base_url),
+          models: Array.isArray(models) ? models : [],
+          verifiedAt: asNullableString(row.verified_at),
+          apiKeyCipher: asNullableString(row.api_key_cipher),
+          createdAt: asNumber(row.created_at),
+          updatedAt: asNumber(row.updated_at),
+        }];
+      });
+  }
+
+  upsertProviderSettings(data: UpsertProviderSettingsData): ProviderSettingsRecord {
+    const now = Date.now();
+    const existing = this.db.prepare('SELECT * FROM provider_settings WHERE id = ?').get(data.id);
+    // `undefined` mantém a chave atual; `null` apaga; string grava a nova.
+    const cipher = data.apiKeyCipher === undefined
+      ? (existing ? asNullableString(existing.api_key_cipher) : null)
+      : data.apiKeyCipher;
+
+    this.db
+      .prepare(
+        `INSERT INTO provider_settings (id, label, base_url, models_json, verified_at, api_key_cipher, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           label = excluded.label,
+           base_url = excluded.base_url,
+           models_json = excluded.models_json,
+           verified_at = excluded.verified_at,
+           api_key_cipher = excluded.api_key_cipher,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        data.id,
+        data.label,
+        data.baseURL,
+        JSON.stringify(data.models),
+        data.verifiedAt ?? null,
+        cipher,
+        existing ? asNumber(existing.created_at) : now,
+        now,
+      );
+
+    const record = this.listProviderSettings().find((item) => item.id === data.id);
+    if (!record) throw new Error('Provedor não encontrado após gravação.');
+    return record;
+  }
+
+  deleteProviderSettings(id: string): boolean {
+    return this.db.prepare('DELETE FROM provider_settings WHERE id = ?').run(id).changes > 0;
   }
 
   searchConversations(query: string): ConversationSummary[] {

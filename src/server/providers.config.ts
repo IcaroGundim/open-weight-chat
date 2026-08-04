@@ -206,7 +206,8 @@ export const PROVIDERS = {
 const STALE_AFTER_DAYS = 90;
 
 function isConfigured(provider: ProviderConfig): boolean {
-  return !provider.requiresApiKey || Boolean(provider.apiKeyEnv && process.env[provider.apiKeyEnv]);
+  if (!provider.requiresApiKey) return true;
+  return Boolean(getProviderApiKey(provider));
 }
 
 function isStale(verifiedAt: string, now = new Date()): boolean {
@@ -220,6 +221,23 @@ interface MergedProviders {
   readonly byId: ReadonlyMap<string, ProviderConfig>;
   readonly customIds: ReadonlySet<string>;
   readonly errors: readonly string[];
+}
+
+/** Provedor vindo do banco, com a chave já decifrada — só em memória. */
+export interface RuntimeProvider {
+  readonly config: ProviderConfig;
+  readonly apiKey: string | null;
+}
+
+let runtimeProviders: readonly RuntimeProvider[] = [];
+
+/**
+ * Substitui os provedores cadastrados pela interface. Chamado pelo servidor a
+ * partir do banco, na criação do app e depois de cada gravação.
+ */
+export function setRuntimeProviders(list: readonly RuntimeProvider[]): void {
+  runtimeProviders = list;
+  mergedCache = null;
 }
 
 let mergedCache: MergedProviders | null = null;
@@ -238,6 +256,14 @@ function getMergedProviders(): MergedProviders {
     byId.set(provider.id, provider);
     customIds.add(provider.id);
   }
+  // Cadastro pela interface tem a última palavra sobre arquivo e variável de
+  // ambiente, mas nunca sobre um provedor embutido — a validação de escrita
+  // recusa esses ids antes de chegar aqui.
+  for (const { config } of runtimeProviders) {
+    if (Object.prototype.hasOwnProperty.call(PROVIDERS, config.id)) continue;
+    byId.set(config.id, config);
+    customIds.add(config.id);
+  }
   mergedCache = { byId, customIds, errors: custom.errors };
   return mergedCache;
 }
@@ -245,6 +271,7 @@ function getMergedProviders(): MergedProviders {
 /** Apenas para testes: relê o ambiente na próxima chamada. */
 export function resetProvidersCache(): void {
   mergedCache = null;
+  runtimeProviders = [];
   resetCustomProvidersCache();
 }
 
@@ -269,6 +296,10 @@ export function getProviderBaseURL(provider: ProviderConfig): string {
 }
 
 export function getProviderApiKey(provider: ProviderConfig): string | undefined {
+  // Chave cadastrada pela interface tem precedência sobre a variável de
+  // ambiente: foi a mais recente decisão explícita do usuário.
+  const runtime = runtimeProviders.find((item) => item.config.id === provider.id);
+  if (runtime?.apiKey) return runtime.apiKey;
   return provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined;
 }
 

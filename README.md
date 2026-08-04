@@ -27,14 +27,25 @@ O banco é criado em `chat.db`, usa WAL/FTS5 e é ignorado pelo Git.
 
 ## Conectar outros provedores
 
-Além dos cinco embutidos (DeepSeek, GLM/Z.ai, Kimi, OpenRouter e Ollama), **qualquer endpoint OpenAI-compatível pode ser ligado sem tocar em código** — OpenCode Zen, Groq, Together, Fireworks, um `llama.cpp` na sua rede. O cliente de streaming é um só; o que muda é `baseURL`, chave e id de modelo.
+Além dos cinco embutidos (DeepSeek, GLM/Z.ai, Kimi, OpenRouter e Ollama), **qualquer endpoint OpenAI-compatível pode ser ligado** — OpenCode Zen, Groq, Together, Fireworks, um `llama.cpp` na sua rede. O cliente de streaming é um só; o que muda é `baseURL`, chave e id de modelo.
 
-Duas formas, que podem coexistir:
+Três formas, que podem coexistir:
 
 | Onde | Quando usar |
 |---|---|
-| `providers.local.json` na raiz | Desenvolvimento — cabe indentado. Está no `.gitignore`. |
+| **Configurações → Provedores** | O caminho normal: cadastra provedor, modelos e a chave pela interface. |
+| `providers.local.json` na raiz | Configuração versionável fora do Git, útil em desenvolvimento. |
 | Variável `CUSTOM_PROVIDERS` (mesmo JSON, uma linha) | Deploy em plataformas que só aceitam variáveis de ambiente. |
+
+### Chaves cadastradas pela interface
+
+A chave sobe uma vez, é cifrada com **AES-256-GCM** e guardada no banco. **Ela nunca volta para o navegador** — a tela só informa se existe. Isso exige `PROVIDER_SECRET_KEY` no ambiente do servidor; sem ela, a interface **recusa** guardar a chave em vez de gravá-la em texto puro.
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+Trocar essa chave-mestra torna ilegíveis as chaves já gravadas — o app trata como "sem chave" e você recadastra. Nos dois arquivos de configuração (`providers.local.json` e `CUSTOM_PROVIDERS`) a regra continua sendo outra: ali só entra o *nome* da variável de ambiente, nunca a chave.
 
 ```json
 [

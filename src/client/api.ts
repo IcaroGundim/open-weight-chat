@@ -10,6 +10,9 @@ import type {
   ArtifactKind,
   ArtifactOperation,
   ModelOption,
+  ProviderModelInput,
+  ProviderSettings,
+  SecretStorageStatus,
   StreamEnvelope,
   StreamErrorEnvelope,
   StreamUsageEnvelope,
@@ -361,6 +364,40 @@ export async function getModels(): Promise<{ models: ModelOption[]; configErrors
     ? [models[defaultIndex], ...models.slice(0, defaultIndex), ...models.slice(defaultIndex + 1)]
     : models;
   return { models: ordered, configErrors };
+}
+
+export async function getProviderSettings(): Promise<{ providers: ProviderSettings[]; secretStorage: SecretStorageStatus }> {
+  const payload = await requestJson('/api/providers', { headers: { Accept: 'application/json' } });
+  const record = isRecord(payload) ? payload : {};
+  const storage = isRecord(record.secretStorage) ? record.secretStorage : {};
+  return {
+    providers: Array.isArray(record.providers) ? (record.providers as ProviderSettings[]) : [],
+    secretStorage: {
+      available: storage.available === true,
+      reason: typeof storage.reason === 'string' ? storage.reason : null,
+    },
+  };
+}
+
+/**
+ * `apiKey` ausente mantém a chave já gravada; `null` apaga; string grava.
+ * A chave sobe uma vez e nunca volta — o servidor só informa se ela existe.
+ */
+export async function saveProviderSettings(
+  id: string,
+  input: { label: string; baseURL: string; models: ProviderModelInput[]; verifiedAt?: string | null; apiKey?: string | null },
+): Promise<ProviderSettings> {
+  const payload = await requestJson(`/api/providers/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { ...JSON_HEADERS, Accept: 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const record = isRecord(payload) && isRecord(payload.provider) ? payload.provider : {};
+  return record as unknown as ProviderSettings;
+}
+
+export async function deleteProviderSettings(id: string): Promise<void> {
+  await requestJson(`/api/providers/${encodeURIComponent(id)}`, { method: 'DELETE', headers: JSON_HEADERS });
 }
 
 export async function getCostAnalytics(days = 30): Promise<CostAnalytics> {

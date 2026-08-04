@@ -5,16 +5,18 @@ import {
   Database,
   Moon,
   Palette,
+  Plug,
   RotateCcw,
   SlidersHorizontal,
   Sun,
   X,
   type LucideIcon,
 } from 'lucide-react';
+import { ProviderSettingsTab } from './ProviderSettingsTab';
 import { useSettingsStore } from '../store/settings';
 import type { DensityMode, ModelOption, ThemeMode } from '../types';
 
-type SettingsTab = 'appearance' | 'model' | 'data';
+type SettingsTab = 'appearance' | 'model' | 'providers' | 'data';
 
 type SettingsPanelProps = {
   models: ModelOption[];
@@ -26,6 +28,7 @@ type SettingsPanelProps = {
 const tabs: Array<{ id: SettingsTab; label: string; hint: string; icon: LucideIcon }> = [
   { id: 'appearance', label: 'Aparência', hint: 'Tema e leitura', icon: Palette },
   { id: 'model', label: 'Modelo', hint: 'Padrão e acesso', icon: Cpu },
+  { id: 'providers', label: 'Provedores', hint: 'APIs e chaves', icon: Plug },
   { id: 'data', label: 'Dados locais', hint: 'Privacidade e reset', icon: Database },
 ];
 
@@ -254,6 +257,8 @@ export function SettingsPanel({ models, selectedModelId, onModelChange, onClose 
                 </div>
               </div>
             ) : null}
+
+            {activeTab === 'providers' ? <ProviderSettingsTab /> : null}
 
             {activeTab === 'data' ? (
               <div id="settings-panel-data" role="tabpanel" aria-labelledby="settings-tab-data">

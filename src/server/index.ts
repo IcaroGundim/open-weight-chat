@@ -6,9 +6,13 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import {
+  BUILTIN_PROVIDER_IDS,
   ChatRequestSchema,
   CreateConversationSchema,
+  ProviderIdSchema,
+  ProviderSettingsInputSchema,
   UpdateConversationSchema,
+  type ProviderSettings,
   type SseEnvelope,
   type ProviderId,
 } from '../shared/types';
@@ -27,8 +31,11 @@ import {
   getModel,
   getModelsCatalog,
   getProvider,
+  setRuntimeProviders,
   type ProviderModelConfig,
+  type RuntimeProvider,
 } from './providers.config';
+import { decryptSecret, encryptSecret, getSecretStorageStatus } from './secrets';
 
 // Node 24 can load the local .env without adding a dotenv dependency. Existing
 // process variables still remain the source of truth in deployed environments.
@@ -129,9 +136,64 @@ function routeErrorHandler(error: unknown, c: Context): Response {
   return jsonError(c, error);
 }
 
+/**
+ * Recarrega no catálogo os provedores cadastrados pela interface, decifrando as
+ * chaves apenas para a memória do processo. Registro inválido é ignorado em vez
+ * de derrubar o catálogo inteiro.
+ */
+function refreshRuntimeProviders(db: ChatDatabase): void {
+  const runtime: RuntimeProvider[] = [];
+  for (const record of db.listProviderSettings()) {
+    const parsed = ProviderSettingsInputSchema.safeParse({
+      label: record.label,
+      baseURL: record.baseURL,
+      verifiedAt: record.verifiedAt,
+      models: record.models,
+    });
+    if (!parsed.success) continue;
+    runtime.push({
+      config: {
+        id: record.id,
+        label: parsed.data.label,
+        baseURL: parsed.data.baseURL,
+        requiresApiKey: true,
+        verifiedAt: record.verifiedAt ?? '',
+        models: parsed.data.models.map((model) => ({
+          id: model.id,
+          label: model.label ?? model.id,
+          ctx: model.ctx,
+          reasoning: model.reasoning ?? false,
+          pricing: {
+            inputPerMillion: model.pricing?.inputPerMillion ?? null,
+            cachedInputPerMillion: model.pricing?.cachedInputPerMillion ?? null,
+            outputPerMillion: model.pricing?.outputPerMillion ?? null,
+          },
+        })),
+      },
+      apiKey: decryptSecret(record.apiKeyCipher),
+    });
+  }
+  setRuntimeProviders(runtime);
+}
+
+function toProviderSettings(record: ReturnType<ChatDatabase['listProviderSettings']>[number]): ProviderSettings {
+  const models = ProviderSettingsInputSchema.shape.models.safeParse(record.models);
+  return {
+    id: record.id,
+    label: record.label,
+    baseURL: record.baseURL,
+    verifiedAt: record.verifiedAt,
+    models: models.success ? models.data : [],
+    // A chave nunca sai daqui; o navegador só sabe se existe.
+    hasKey: Boolean(record.apiKeyCipher),
+    updatedAt: record.updatedAt,
+  };
+}
+
 export function createApp(options: AppOptions = {}): Hono {
   const db = options.db ?? new ChatDatabase();
   const app = new Hono();
+  refreshRuntimeProviders(db);
 
   app.use('*', async (c, next) => {
     c.header('X-Content-Type-Options', 'nosniff');
@@ -144,6 +206,59 @@ export function createApp(options: AppOptions = {}): Hono {
   });
 
   app.get('/api/models', (c) => c.json(getModelsCatalog()));
+
+  app.get('/api/providers', (c) => c.json({
+    providers: db.listProviderSettings().map(toProviderSettings),
+    secretStorage: getSecretStorageStatus(),
+  }));
+
+  app.put('/api/providers/:id', async (c) => {
+    try {
+      const id = c.req.param('id');
+      const idCheck = ProviderIdSchema.safeParse(id);
+      if (!idCheck.success) {
+        throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
+      }
+      if ((BUILTIN_PROVIDER_IDS as readonly string[]).includes(id)) {
+        throw new AppError('UNKNOWN', {
+          status: 400,
+          message: `O id "${id}" pertence a um provedor embutido. Escolha outro id.`,
+        });
+      }
+      const body = await parseJson(c, ProviderSettingsInputSchema);
+
+      let apiKeyCipher: string | null | undefined;
+      if (body.apiKey === null) {
+        apiKeyCipher = null;
+      } else if (typeof body.apiKey === 'string' && body.apiKey.trim()) {
+        const status = getSecretStorageStatus();
+        if (!status.available) {
+          throw new AppError('UNKNOWN', { status: 400, message: status.reason ?? 'Não é possível guardar chaves.' });
+        }
+        apiKeyCipher = encryptSecret(body.apiKey.trim());
+      }
+
+      const record = db.upsertProviderSettings({
+        id,
+        label: body.label,
+        baseURL: body.baseURL,
+        models: body.models,
+        verifiedAt: body.verifiedAt ?? null,
+        apiKeyCipher,
+      });
+      refreshRuntimeProviders(db);
+      return c.json({ provider: toProviderSettings(record) });
+    } catch (error) {
+      return routeErrorHandler(error, c);
+    }
+  });
+
+  app.delete('/api/providers/:id', (c) => {
+    const deleted = db.deleteProviderSettings(c.req.param('id'));
+    if (!deleted) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' }));
+    refreshRuntimeProviders(db);
+    return c.json({ ok: true as const });
+  });
 
   app.get('/api/analytics/costs', (c) => {
     const rawDays = Number(c.req.query('days') ?? 30);

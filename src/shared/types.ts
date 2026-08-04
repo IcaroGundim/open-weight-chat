@@ -197,6 +197,52 @@ export const ModelsResponseSchema = z.object({
 });
 export type ModelsResponse = z.infer<typeof ModelsResponseSchema>;
 
+export const ProviderModelInputSchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  label: z.string().trim().min(1).max(160).optional(),
+  ctx: z
+    .number({ error: 'Informe a janela de contexto do modelo, em tokens.' })
+    .int('A janela precisa ser um número inteiro de tokens.')
+    .positive('A janela precisa ser maior que zero.'),
+  reasoning: z.boolean().optional(),
+  pricing: z
+    .object({
+      inputPerMillion: z.number().nonnegative().nullable().optional(),
+      cachedInputPerMillion: z.number().nonnegative().nullable().optional(),
+      outputPerMillion: z.number().nonnegative().nullable().optional(),
+    })
+    .optional(),
+});
+export type ProviderModelInput = z.infer<typeof ProviderModelInputSchema>;
+
+export const ProviderSettingsInputSchema = z.object({
+  label: z.string().trim().min(1, 'Dê um nome ao provedor.').max(80),
+  baseURL: z.string().url('A URL base precisa ser absoluta, incluindo https://'),
+  verifiedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).nullable().optional(),
+  models: z.array(ProviderModelInputSchema).min(1, 'Cadastre ao menos um modelo.'),
+  /** string grava a chave; null apaga; ausente mantém a que já existe. */
+  apiKey: z.string().max(500).nullable().optional(),
+});
+export type ProviderSettingsInput = z.infer<typeof ProviderSettingsInputSchema>;
+
+/** Forma devolvida ao navegador. Nunca inclui a chave — apenas `hasKey`. */
+export const ProviderSettingsSchema = z.object({
+  id: ProviderIdSchema,
+  label: z.string().min(1),
+  baseURL: z.string().min(1),
+  verifiedAt: z.string().nullable(),
+  models: z.array(ProviderModelInputSchema),
+  hasKey: z.boolean(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type ProviderSettings = z.infer<typeof ProviderSettingsSchema>;
+
+export const ProviderSettingsResponseSchema = z.object({
+  providers: z.array(ProviderSettingsSchema),
+  secretStorage: z.object({ available: z.boolean(), reason: z.string().nullable() }),
+});
+export type ProviderSettingsResponse = z.infer<typeof ProviderSettingsResponseSchema>;
+
 export const ChatRequestSchema = z.object({
   conversationId: z.string().min(1).nullable().optional(),
   content: z.string().trim().min(1, 'A mensagem não pode ficar vazia.').max(200_000),

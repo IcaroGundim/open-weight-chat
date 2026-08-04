@@ -101,3 +101,17 @@ CREATE TRIGGER IF NOT EXISTS artifact_versions_au AFTER UPDATE OF content ON art
   INSERT INTO artifact_versions_fts(artifact_versions_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO artifact_versions_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- Provedores cadastrados pela interface. A chave de API vai em api_key_cipher,
+-- cifrada com AES-256-GCM (src/server/secrets.ts) — nunca em texto puro, e
+-- nunca devolvida ao navegador.
+CREATE TABLE IF NOT EXISTS provider_settings (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  models_json TEXT NOT NULL,
+  verified_at TEXT,
+  api_key_cipher TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);

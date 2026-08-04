@@ -158,6 +158,34 @@ export interface CostAnalytics {
   byModel: Array<{ providerId: string; modelId: string; costUsd: number; messageCount: number }>;
 }
 
+export interface ProviderModelInput {
+  id: string;
+  label?: string;
+  ctx: number;
+  reasoning?: boolean;
+  pricing?: {
+    inputPerMillion?: number | null;
+    outputPerMillion?: number | null;
+    cachedInputPerMillion?: number | null;
+  };
+}
+
+/** O que o servidor devolve: nunca inclui a chave, só se ela existe. */
+export interface ProviderSettings {
+  id: string;
+  label: string;
+  baseURL: string;
+  verifiedAt: string | null;
+  models: ProviderModelInput[];
+  hasKey: boolean;
+  updatedAt: number;
+}
+
+export interface SecretStorageStatus {
+  available: boolean;
+  reason: string | null;
+}
+
 export interface ChatRequest {
   conversationId: string;
   content: string;
