@@ -396,6 +396,16 @@ export async function saveProviderSettings(
   return record as unknown as ProviderSettings;
 }
 
+/** Pede ao servidor para consultar /models usando a chave que ele guarda. */
+export async function discoverProviderModels(id: string): Promise<ProviderSettings> {
+  const payload = await requestJson(`/api/providers/${encodeURIComponent(id)}/discover-models`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+  });
+  const record = isRecord(payload) && isRecord(payload.provider) ? payload.provider : {};
+  return record as unknown as ProviderSettings;
+}
+
 export async function deleteProviderSettings(id: string): Promise<void> {
   await requestJson(`/api/providers/${encodeURIComponent(id)}`, { method: 'DELETE', headers: JSON_HEADERS });
 }

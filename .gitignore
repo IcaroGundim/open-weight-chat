@@ -5,6 +5,7 @@ chat.db-shm
 chat.db-wal
 .env
 *.log
+.provider-secret
 
 # ferramentas locais de agente, fora do repositorio publico
 .commandcode/

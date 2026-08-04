@@ -31,11 +31,14 @@ import {
   getModel,
   getModelsCatalog,
   getProvider,
+  getProviderApiKey,
+  getProviderBaseURL,
   setRuntimeProviders,
   type ProviderModelConfig,
   type RuntimeProvider,
 } from './providers.config';
 import { decryptSecret, encryptSecret, getSecretStorageStatus } from './secrets';
+import { discoverProviderModels } from './providers.discovery';
 
 // Node 24 can load the local .env without adding a dotenv dependency. Existing
 // process variables still remain the source of truth in deployed environments.
@@ -248,6 +251,47 @@ export function createApp(options: AppOptions = {}): Hono {
       });
       refreshRuntimeProviders(db);
       return c.json({ provider: toProviderSettings(record) });
+    } catch (error) {
+      return routeErrorHandler(error, c);
+    }
+  });
+
+  app.post('/api/providers/:id/discover-models', async (c) => {
+    try {
+      const id = c.req.param('id');
+      const idCheck = ProviderIdSchema.safeParse(id);
+      if (!idCheck.success) {
+        throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
+      }
+      if ((BUILTIN_PROVIDER_IDS as readonly string[]).includes(id)) {
+        throw new AppError('UNKNOWN', {
+          status: 400,
+          message: `O id "${id}" pertence a um provedor embutido.`,
+        });
+      }
+
+      const record = db.listProviderSettings().find((item) => item.id === id);
+      if (!record) {
+        throw new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' });
+      }
+      const provider = getProvider(id);
+      if (!provider) {
+        throw new AppError('UNKNOWN', { status: 400, message: 'O provedor ainda não está disponível no catálogo.' });
+      }
+      const models = await discoverProviderModels(
+        getProviderBaseURL(provider),
+        getProviderApiKey(provider),
+        options.fetchImpl ?? fetch,
+      );
+      const updated = db.upsertProviderSettings({
+        id,
+        label: record.label,
+        baseURL: record.baseURL,
+        models,
+        verifiedAt: new Date().toISOString().slice(0, 10),
+      });
+      refreshRuntimeProviders(db);
+      return c.json({ provider: toProviderSettings(updated), discovered: models.length });
     } catch (error) {
       return routeErrorHandler(error, c);
     }

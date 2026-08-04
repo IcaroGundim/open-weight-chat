@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ChatDatabase } from './db/queries';
 import { createApp } from './index';
 import { getProvider, getProviderApiKey, resetProvidersCache } from './providers.config';
@@ -16,15 +20,20 @@ function json(body: unknown): RequestInit {
 }
 
 let database: ChatDatabase;
+let secretFile: string;
 
 beforeEach(() => {
+  secretFile = join(tmpdir(), `open-weight-chat-provider-${randomUUID()}.secret`);
   process.env.PROVIDER_SECRET_KEY = SECRET;
+  process.env.PROVIDER_SECRET_FILE = secretFile;
   database = new ChatDatabase(':memory:');
 });
 
 afterEach(() => {
   database.close();
   delete process.env.PROVIDER_SECRET_KEY;
+  delete process.env.PROVIDER_SECRET_FILE;
+  rmSync(secretFile, { force: true });
   resetProvidersCache();
 });
 
@@ -61,13 +70,50 @@ describe('cadastro de provedor pela interface', () => {
     expect(entry.configured).toBe(true);
   });
 
-  it('recusa guardar chave sem PROVIDER_SECRET_KEY, em vez de gravar em texto puro', async () => {
+  it('salva sem modelos e descobre o catálogo OpenAI-compatible no servidor', async () => {
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    const app = createApp({
+      db: database,
+      fetchImpl: async (input, init) => {
+        requests.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get('authorization'),
+        });
+        return new Response(JSON.stringify({
+          data: [
+            { id: 'zen-fast', name: 'Zen Fast', context_length: 200_000 },
+            { id: 'zen-reasoner', name: 'Zen Reasoner', reasoning: true },
+          ],
+        }), { headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    const saved = await app.request('/api/providers/opencode', json({
+      ...PROVIDER,
+      models: [],
+      apiKey: 'sk-segredo-real',
+    }));
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).provider.models).toHaveLength(0);
+
+    const discovered = await app.request('/api/providers/opencode/discover-models', { method: 'POST' });
+    expect(discovered.status).toBe(200);
+    const payload = await discovered.json();
+    expect(payload.discovered).toBe(2);
+    expect(payload.provider.models[0]).toMatchObject({ id: 'zen-fast', ctx: 200_000 });
+    expect(payload.provider.models[1]).toMatchObject({ id: 'zen-reasoner', ctx: 131_072, reasoning: true });
+    expect(requests).toEqual([{ url: 'https://opencode.ai/zen/v1/models', authorization: 'Bearer sk-segredo-real' }]);
+    expect((await (await app.request('/api/models')).json()).providers.find((item: { id: string }) => item.id === 'opencode').models).toHaveLength(2);
+  });
+
+  it('gera a chave-mestra automaticamente quando o cadastro vem pela web', async () => {
     delete process.env.PROVIDER_SECRET_KEY;
     const app = createApp({ db: database });
     const response = await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: 'sk-segredo-real' }));
-    expect(response.status).toBe(400);
-    expect((await response.json()).error.message).toContain('PROVIDER_SECRET_KEY');
-    expect(database.listProviderSettings()).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect((await response.json()).provider.hasKey).toBe(true);
+    expect(getSecretStorageStatus().available).toBe(true);
+    expect(database.listProviderSettings()).toHaveLength(1);
   });
 
   it('salva sem chave quando o campo não é enviado e mantém a chave em edições seguintes', async () => {

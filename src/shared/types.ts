@@ -219,7 +219,8 @@ export const ProviderSettingsInputSchema = z.object({
   label: z.string().trim().min(1, 'Dê um nome ao provedor.').max(80),
   baseURL: z.string().url('A URL base precisa ser absoluta, incluindo https://'),
   verifiedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).nullable().optional(),
-  models: z.array(ProviderModelInputSchema).min(1, 'Cadastre ao menos um modelo.'),
+  /** A lista é preenchida automaticamente pelo endpoint /models do provedor. */
+  models: z.array(ProviderModelInputSchema).default([]),
   /** string grava a chave; null apaga; ausente mantém a que já existe. */
   apiKey: z.string().max(500).nullable().optional(),
 });

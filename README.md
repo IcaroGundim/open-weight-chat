@@ -33,19 +33,17 @@ Três formas, que podem coexistir:
 
 | Onde | Quando usar |
 |---|---|
-| **Configurações → Provedores** | O caminho normal: cadastra provedor, modelos e a chave pela interface. |
+| **Configurações → Provedores** | O caminho normal: cadastra provedor e chave pela interface; os modelos aparecem automaticamente. |
 | `providers.local.json` na raiz | Configuração versionável fora do Git, útil em desenvolvimento. |
 | Variável `CUSTOM_PROVIDERS` (mesmo JSON, uma linha) | Deploy em plataformas que só aceitam variáveis de ambiente. |
 
 ### Chaves cadastradas pela interface
 
-A chave sobe uma vez, é cifrada com **AES-256-GCM** e guardada no banco. **Ela nunca volta para o navegador** — a tela só informa se existe. Isso exige `PROVIDER_SECRET_KEY` no ambiente do servidor; sem ela, a interface **recusa** guardar a chave em vez de gravá-la em texto puro.
+A chave sobe uma vez, é cifrada com **AES-256-GCM** e guardada no banco. **Ela nunca volta para o navegador** — a tela só informa se existe. A chave-mestra é criada automaticamente pelo servidor no arquivo local `.provider-secret`, que já está ignorado pelo Git. `PROVIDER_SECRET_KEY` continua disponível apenas como sobrescrita opcional para instalações que já têm uma chave-mestra própria.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
-```
+Ao salvar um provedor pela interface, o servidor consulta `GET <baseURL>/models`, grava os modelos retornados e atualiza o seletor do chat. O provedor precisa expor esse endpoint no formato OpenAI-compatible; quando a resposta não informa a janela de contexto, o app usa uma estimativa conservadora de 131.072 tokens.
 
-Trocar essa chave-mestra torna ilegíveis as chaves já gravadas — o app trata como "sem chave" e você recadastra. Nos dois arquivos de configuração (`providers.local.json` e `CUSTOM_PROVIDERS`) a regra continua sendo outra: ali só entra o *nome* da variável de ambiente, nunca a chave.
+Se `.provider-secret` for apagado ou perdido, as chaves antigas não poderão ser decifradas e precisarão ser cadastradas novamente. Inclua esse arquivo junto com o banco em um backup privado. Nos dois arquivos de configuração (`providers.local.json` e `CUSTOM_PROVIDERS`) a regra continua sendo outra: ali só entra o *nome* da variável de ambiente, nunca a chave.
 
 ```json
 [

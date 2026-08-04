@@ -1,29 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { KeyRound, Pencil, Plus, ShieldAlert, Trash2, X } from 'lucide-react';
-import { deleteProviderSettings, getProviderSettings, saveProviderSettings } from '../api';
+import { KeyRound, Pencil, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
+import { deleteProviderSettings, discoverProviderModels, getProviderSettings, saveProviderSettings } from '../api';
 import { useChatStore } from '../store/chat';
 import type { ProviderSettings, SecretStorageStatus } from '../types';
-
-interface ModelDraft {
-  id: string;
-  label: string;
-  ctx: string;
-  reasoning: boolean;
-  inputPrice: string;
-  outputPrice: string;
-}
 
 interface Draft {
   id: string;
   label: string;
   baseURL: string;
   apiKey: string;
-  models: ModelDraft[];
 }
 
-const emptyModel = (): ModelDraft => ({ id: '', label: '', ctx: '', reasoning: false, inputPrice: '', outputPrice: '' });
-
-const emptyDraft = (): Draft => ({ id: '', label: '', baseURL: '', apiKey: '', models: [emptyModel()] });
+const emptyDraft = (): Draft => ({ id: '', label: '', baseURL: '', apiKey: '' });
 
 function draftFrom(provider: ProviderSettings): Draft {
   return {
@@ -31,24 +19,15 @@ function draftFrom(provider: ProviderSettings): Draft {
     label: provider.label,
     baseURL: provider.baseURL,
     apiKey: '',
-    models: provider.models.length > 0
-      ? provider.models.map((model) => ({
-          id: model.id,
-          label: model.label ?? '',
-          ctx: String(model.ctx),
-          reasoning: model.reasoning ?? false,
-          inputPrice: model.pricing?.inputPerMillion != null ? String(model.pricing.inputPerMillion) : '',
-          outputPrice: model.pricing?.outputPerMillion != null ? String(model.pricing.outputPerMillion) : '',
-        }))
-      : [emptyModel()],
   };
 }
 
-function optionalNumber(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed.replace(',', '.'));
-  return Number.isFinite(parsed) ? parsed : null;
+function contextLabel(value: number): string {
+  return `${new Intl.NumberFormat('pt-BR').format(value)} tokens`;
+}
+
+function reasonMessage(reason: unknown, fallback: string): string {
+  return reason instanceof Error ? reason.message : fallback;
 }
 
 export function ProviderSettingsTab() {
@@ -60,6 +39,7 @@ export function ProviderSettingsTab() {
   const [confirmingKeyId, setConfirmingKeyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [discoveringId, setDiscoveringId] = useState<string | null>(null);
   const loadModels = useChatStore((state) => state.loadModels);
 
   const refresh = useCallback(async () => {
@@ -67,8 +47,10 @@ export function ProviderSettingsTab() {
       const result = await getProviderSettings();
       setProviders(result.providers);
       setSecretStorage(result.secretStorage);
+      return result.providers;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Não foi possível carregar os provedores.');
+      setError(reasonMessage(reason, 'Não foi possível carregar os provedores.'));
+      return null;
     }
   }, []);
 
@@ -85,55 +67,78 @@ export function ProviderSettingsTab() {
   const startEdit = (provider: ProviderSettings) => {
     setError(null);
     setConfirmingId(null);
+    setConfirmingKeyId(null);
     setEditingId(provider.id);
     setDraft(draftFrom(provider));
   };
 
-  const updateModel = (index: number, patch: Partial<ModelDraft>) => {
-    setDraft((current) => current && {
-      ...current,
-      models: current.models.map((model, position) => (position === index ? { ...model, ...patch } : model)),
-    });
+  const retryDiscovery = async (id: string) => {
+    setError(null);
+    setDiscoveringId(id);
+    try {
+      await discoverProviderModels(id);
+      await refresh();
+      await loadModels();
+    } catch (reason) {
+      setError(reasonMessage(reason, 'Não foi possível atualizar os modelos do provedor.'));
+    } finally {
+      setDiscoveringId(null);
+    }
   };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!draft) return;
+
+    const id = draft.id.trim();
+    const label = draft.label.trim();
+    const baseURL = draft.baseURL.trim();
+    if (!id || !label || !baseURL) {
+      setError('Preencha o identificador, o nome e a URL base do provedor.');
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
-      const models = draft.models
-        .filter((model) => model.id.trim())
-        .map((model) => ({
-          id: model.id.trim(),
-          label: model.label.trim() || undefined,
-          ctx: Number(model.ctx.trim()),
-          reasoning: model.reasoning,
-          pricing: {
-            inputPerMillion: optionalNumber(model.inputPrice),
-            outputPerMillion: optionalNumber(model.outputPrice),
-          },
-        }));
-      await saveProviderSettings(draft.id.trim(), {
-        label: draft.label.trim(),
-        baseURL: draft.baseURL.trim(),
-        models,
-        // Campo vazio ao editar mantém a chave já gravada.
-        ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+      const existing = providers.find((provider) => provider.id === id);
+      const hasNewKey = Boolean(draft.apiKey.trim());
+      const endpointChanged = !existing || existing.baseURL !== baseURL || hasNewKey;
+      const saved = await saveProviderSettings(id, {
+        label,
+        baseURL,
+        // A lista deixa de ser uma entrada manual. Ao alterar a conexão,
+        // descartamos o catálogo antigo para não misturar modelos de URLs.
+        models: endpointChanged ? [] : (existing?.models ?? []),
+        ...(hasNewKey ? { apiKey: draft.apiKey.trim() } : {}),
       });
+
+      const shouldDiscover = endpointChanged || saved.models.length === 0;
+      if (shouldDiscover) {
+        try {
+          await discoverProviderModels(saved.id);
+        } catch (reason) {
+          // O cadastro continua salvo para permitir corrigir a URL/chave e
+          // tentar novamente sem perder o segredo recém-gravado.
+          await refresh();
+          await loadModels();
+          setError(`Provedor salvo, mas não consegui carregar os modelos: ${reasonMessage(reason, 'verifique a conexão e tente novamente.')}`);
+          return;
+        }
+      }
+
       setDraft(null);
       setEditingId(null);
       await refresh();
       await loadModels();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o provedor.');
+      setError(reasonMessage(reason, 'Não foi possível salvar o provedor.'));
     } finally {
       setSaving(false);
     }
   };
 
-  // Apagar a chave é destrutivo e irreversível — exige o mesmo dois-passos da
-  // exclusão do provedor, em vez de disparar no primeiro clique.
+  // Apagar a chave é destrutivo e irreversível — exige confirmação explícita.
   const removeKey = async (provider: ProviderSettings) => {
     setError(null);
     setConfirmingKeyId(null);
@@ -147,7 +152,7 @@ export function ProviderSettingsTab() {
       await refresh();
       await loadModels();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Não foi possível remover a chave.');
+      setError(reasonMessage(reason, 'Não foi possível remover a chave.'));
     }
   };
 
@@ -163,17 +168,20 @@ export function ProviderSettingsTab() {
       await refresh();
       await loadModels();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Não foi possível excluir o provedor.');
+      setError(reasonMessage(reason, 'Não foi possível excluir o provedor.'));
     }
   };
+
+  const draftProvider = draft ? providers.find((provider) => provider.id === draft.id) : undefined;
+  const draftModels = draftProvider?.models ?? [];
 
   return (
     <div id="settings-panel-providers" role="tabpanel" aria-labelledby="settings-tab-providers">
       <div className="settings-section-intro">
         <h3>Conecte qualquer provedor compatível com a API da OpenAI.</h3>
         <p>
-          A chave sobe uma vez, é cifrada e guardada no servidor. Ela nunca volta para o navegador —
-          esta tela só mostra se existe.
+          A chave sobe uma vez, é cifrada e guardada no servidor. O aplicativo cria automaticamente a proteção interna;
+          você só precisa colar a chave do provedor. Ao salvar, o servidor consulta o catálogo e traz os modelos para o chat.
         </p>
       </div>
 
@@ -206,7 +214,9 @@ export function ProviderSettingsTab() {
                   <KeyRound size={13} aria-hidden="true" />
                   {provider.hasKey ? 'chave configurada' : 'sem chave'}
                 </span>
-                <span className="provider-row-count">{provider.models.length} modelo{provider.models.length === 1 ? '' : 's'}</span>
+                <span className={provider.models.length > 0 ? 'provider-row-count' : 'provider-row-count provider-row-count-warning'}>
+                  {provider.models.length > 0 ? `${provider.models.length} modelo${provider.models.length === 1 ? '' : 's'}` : 'modelos não carregados'}
+                </span>
                 {confirmingId === provider.id ? (
                   <span className="provider-row-actions">
                     <span className="provider-confirm-label">Excluir o provedor?</span>
@@ -221,6 +231,16 @@ export function ProviderSettingsTab() {
                   </span>
                 ) : (
                   <span className="provider-row-actions">
+                    <button
+                      type="button"
+                      className="btn btn-icon"
+                      onClick={() => void retryDiscovery(provider.id)}
+                      disabled={discoveringId === provider.id}
+                      aria-label={`Atualizar modelos de ${provider.label}`}
+                      title="Atualizar modelos"
+                    >
+                      <RefreshCw size={15} className={discoveringId === provider.id ? 'provider-spin' : undefined} />
+                    </button>
                     {provider.hasKey ? (
                       <button type="button" className="btn btn-icon" onClick={() => { setConfirmingId(null); setConfirmingKeyId(provider.id); }} aria-label={`Apagar a chave de ${provider.label}`} title="Apagar a chave">
                         <KeyRound size={15} />
@@ -244,7 +264,7 @@ export function ProviderSettingsTab() {
         <form className="settings-group provider-form" onSubmit={(event) => void submit(event)}>
           <div className="settings-group-heading">
             <strong>{editingId ? `Editar ${editingId}` : 'Novo provedor'}</strong>
-            <span>O identificador não pode repetir um provedor embutido.</span>
+            <span>Use um identificador próprio; ids dos provedores embutidos não podem ser reutilizados.</span>
           </div>
 
           <div className="provider-grid">
@@ -267,6 +287,7 @@ export function ProviderSettingsTab() {
           <label className="provider-field">
             <span>URL base</span>
             <input value={draft.baseURL} onChange={(event) => setDraft({ ...draft, baseURL: event.target.value })} placeholder="https://opencode.ai/zen/v1" required />
+            <small className="provider-field-hint">O sistema acrescenta /models para buscar os modelos e /chat/completions para conversar.</small>
           </label>
 
           <label className="provider-field">
@@ -282,52 +303,36 @@ export function ProviderSettingsTab() {
           </label>
 
           <div className="settings-group-heading provider-models-heading">
-            <strong>Modelos</strong>
-            <span>A janela de contexto é obrigatória: é ela que dirige o corte de histórico.</span>
+            <strong>Modelos disponíveis</strong>
+            <span>Preenchidos automaticamente pelo provedor após salvar.</span>
+          </div>
+          <div className="provider-models-card">
+            {draftModels.length > 0 ? (
+              <>
+                <div className="provider-models-summary">{draftModels.length} modelo{draftModels.length === 1 ? '' : 's'} encontrado{draftModels.length === 1 ? '' : 's'}</div>
+                <div className="provider-models-list">
+                  {draftModels.slice(0, 12).map((model) => (
+                    <div className="provider-model-item" key={model.id}>
+                      <span>
+                        <strong>{model.label ?? model.id}</strong>
+                        <small>{model.id}</small>
+                      </span>
+                      <em>{contextLabel(model.ctx)}</em>
+                    </div>
+                  ))}
+                </div>
+                {draftModels.length > 12 ? <small className="provider-field-hint">Os outros {draftModels.length - 12} modelos também aparecem no seletor do chat.</small> : null}
+              </>
+            ) : (
+              <p className="provider-models-empty">Nenhum modelo carregado ainda. Salve o provedor para consultar /models automaticamente.</p>
+            )}
           </div>
 
-          {draft.models.map((model, index) => (
-            <div className="provider-model-row" key={index}>
-              <label className="provider-field">
-                <span>Id do modelo</span>
-                <input value={model.id} onChange={(event) => updateModel(index, { id: event.target.value })} placeholder="gpt-5.6-luna" />
-              </label>
-              <label className="provider-field">
-                <span>Contexto</span>
-                <input inputMode="numeric" value={model.ctx} onChange={(event) => updateModel(index, { ctx: event.target.value })} placeholder="272000" />
-              </label>
-              <label className="provider-field">
-                <span>US$ / 1M entrada</span>
-                <input inputMode="decimal" value={model.inputPrice} onChange={(event) => updateModel(index, { inputPrice: event.target.value })} placeholder="opcional" />
-              </label>
-              <label className="provider-field">
-                <span>US$ / 1M saída</span>
-                <input inputMode="decimal" value={model.outputPrice} onChange={(event) => updateModel(index, { outputPrice: event.target.value })} placeholder="opcional" />
-              </label>
-              <label className="provider-check">
-                <input type="checkbox" checked={model.reasoning} onChange={(event) => updateModel(index, { reasoning: event.target.checked })} />
-                <span>Raciocínio</span>
-              </label>
-              {draft.models.length > 1 ? (
-                <button
-                  type="button"
-                  className="btn btn-icon"
-                  onClick={() => setDraft({ ...draft, models: draft.models.filter((_, position) => position !== index) })}
-                  aria-label="Remover este modelo"
-                >
-                  <X size={15} />
-                </button>
-              ) : null}
-            </div>
-          ))}
-
           <div className="provider-form-actions">
-            <button type="button" className="btn" onClick={() => setDraft({ ...draft, models: [...draft.models, emptyModel()] })}>
-              <Plus size={15} aria-hidden="true" /> Adicionar modelo
-            </button>
+            <span className="provider-form-note">A descoberta usa a chave somente no servidor.</span>
             <span className="provider-form-spacer" />
             <button type="button" className="btn" onClick={() => { setDraft(null); setEditingId(null); }}>Cancelar</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Salvando…' : 'Salvar'}</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Salvando e buscando…' : 'Salvar e buscar modelos'}</button>
           </div>
         </form>
       ) : (
