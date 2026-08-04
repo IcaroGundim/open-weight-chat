@@ -6,6 +6,11 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfaf7" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17120f" />
     <meta name="description" content="Chat self-hosted para modelos open-weight com custo por mensagem." />
+    <script type="module">
+      if (import.meta.env.DEV) {
+        import('react-grab');
+      }
+    </script>
     <title>Open Weight Chat</title>
   </head>
   <body>

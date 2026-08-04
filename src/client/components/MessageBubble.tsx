@@ -5,7 +5,7 @@ import { useChatStore } from '../store/chat';
 import { ArtifactCard } from './ArtifactCard';
 import { CostBadge } from './CostBadge';
 import { ReasoningBlock } from './ReasoningBlock';
-import type { ChatMessage } from '../types';
+import { EMPTY_ARTIFACTS, type ChatMessage } from '../types';
 
 type MessageBubbleProps = {
   message: ChatMessage;
@@ -27,7 +27,7 @@ function formatDateTime(value?: string | number): string | undefined {
 }
 
 function AssistantContent({ message }: { message: ChatMessage }) {
-  const artifacts = useChatStore((state) => state.artifactsByConversation[message.conversationId ?? ''] ?? []);
+  const artifacts = useChatStore((state) => state.artifactsByConversation[message.conversationId ?? ''] ?? EMPTY_ARTIFACTS);
   const promoteCodeArtifact = useChatStore((state) => state.promoteCodeArtifact);
   const segments: Array<{ type: 'text'; value: string } | { type: 'artifact'; slug: string; version: number }> = [];
   let cursor = 0;

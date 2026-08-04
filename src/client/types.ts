@@ -194,3 +194,5 @@ export interface ChatRequest {
 }
 
 export const EMPTY_MESSAGES: ChatMessage[] = [];
+/** Referência estável para seletores Zustand usados com React 19. */
+export const EMPTY_ARTIFACTS: Artifact[] = [];

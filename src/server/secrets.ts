@@ -58,6 +58,12 @@ function persistSecret(path: string, value: string): boolean {
 }
 
 function automaticMasterSecret(): MasterSecretResult {
+  if (process.env.VERCEL) {
+    return {
+      value: null,
+      reason: 'Na Vercel, configure PROVIDER_SECRET_KEY com ao menos 16 caracteres. O disco da função não é persistente.',
+    };
+  }
   const path = secretFilePath();
   if (generatedSecret?.path === path) return { value: generatedSecret.value, reason: null };
 

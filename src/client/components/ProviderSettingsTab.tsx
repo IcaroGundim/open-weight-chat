@@ -48,6 +48,7 @@ export function ProviderSettingsTab() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [confirmingKeyId, setConfirmingKeyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [discoveringId, setDiscoveringId] = useState<string | null>(null);
   const loadModels = useChatStore((state) => state.loadModels);
@@ -70,12 +71,14 @@ export function ProviderSettingsTab() {
 
   const startCreate = () => {
     setError(null);
+    setSuccess(null);
     setEditingId(null);
     setDraft(emptyDraft());
   };
 
   const startEdit = (provider: ProviderSettings) => {
     setError(null);
+    setSuccess(null);
     setConfirmingId(null);
     setConfirmingKeyId(null);
     setEditingId(provider.id);
@@ -84,11 +87,14 @@ export function ProviderSettingsTab() {
 
   const retryDiscovery = async (id: string) => {
     setError(null);
+    setSuccess(null);
     setDiscoveringId(id);
     try {
       await discoverProviderModels(id);
-      await refresh();
+      const refreshed = await refresh();
       await loadModels();
+      const provider = refreshed?.find((item) => item.id === id);
+      if (provider) setSuccess(`${provider.models.length} modelo${provider.models.length === 1 ? '' : 's'} carregado${provider.models.length === 1 ? '' : 's'} de ${provider.label}.`);
     } catch (reason) {
       setError(reasonMessage(reason, 'Não foi possível atualizar os modelos do provedor.'));
     } finally {
@@ -111,6 +117,7 @@ export function ProviderSettingsTab() {
 
     setSaving(true);
     setError(null);
+    setSuccess(null);
     try {
       const existing = providers.find((provider) => provider.id === id);
       const hasNewKey = Boolean(draft.apiKey.trim());
@@ -138,10 +145,16 @@ export function ProviderSettingsTab() {
         }
       }
 
-      setDraft(null);
-      setEditingId(null);
-      await refresh();
+      const refreshed = await refresh();
       await loadModels();
+      const updated = refreshed?.find((provider) => provider.id === saved.id);
+      if (updated) {
+        // Mantemos o cadastro visível: assim o resultado da descoberta não
+        // desaparece quando o formulário encurta dentro do painel rolável.
+        setDraft(draftFrom(updated));
+        setEditingId(updated.id);
+        setSuccess(`${updated.models.length} modelo${updated.models.length === 1 ? '' : 's'} encontrado${updated.models.length === 1 ? '' : 's'} e pronto${updated.models.length === 1 ? '' : 's'} para usar no chat.`);
+      }
     } catch (reason) {
       setError(reasonMessage(reason, 'Não foi possível salvar o provedor.'));
     } finally {
@@ -152,6 +165,7 @@ export function ProviderSettingsTab() {
   // Apagar a chave é destrutivo e irreversível — exige confirmação explícita.
   const removeKey = async (provider: ProviderSettings) => {
     setError(null);
+    setSuccess(null);
     setConfirmingKeyId(null);
     try {
       await saveProviderSettings(provider.id, {
@@ -169,6 +183,7 @@ export function ProviderSettingsTab() {
 
   const remove = async (id: string) => {
     setError(null);
+    setSuccess(null);
     try {
       await deleteProviderSettings(id);
       setConfirmingId(null);
@@ -204,6 +219,7 @@ export function ProviderSettingsTab() {
       ) : null}
 
       {error && !draft ? <p className="provider-error" role="alert">{error}</p> : null}
+      {success && !draft ? <p className="provider-success" role="status">{success}</p> : null}
 
       <div className="settings-group">
         <div className="settings-group-heading">
@@ -273,7 +289,6 @@ export function ProviderSettingsTab() {
 
       {draft ? (
         <form className="settings-group provider-form" onSubmit={(event) => void submit(event)}>
-          {error ? <p className="provider-error" role="alert">{error}</p> : null}
           <div className="settings-group-heading">
             <strong>{editingId ? `Editar ${editingId}` : 'Novo provedor'}</strong>
             <span>Use minúsculas, números e hífen. Para configurar um provedor embutido, use o identificador dele, como <code>openrouter</code>.</span>
@@ -342,10 +357,13 @@ export function ProviderSettingsTab() {
             )}
           </div>
 
+          {error ? <p className="provider-error provider-form-feedback" role="alert">{error}</p> : null}
+          {success ? <p className="provider-success provider-form-feedback" role="status">{success}</p> : null}
+
           <div className="provider-form-actions">
             <span className="provider-form-note">A descoberta usa a chave somente no servidor.</span>
             <span className="provider-form-spacer" />
-            <button type="button" className="btn" onClick={() => { setDraft(null); setEditingId(null); }}>Cancelar</button>
+            <button type="button" className="btn" onClick={() => { setDraft(null); setEditingId(null); setError(null); setSuccess(null); }}>Concluir</button>
             <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Salvando e buscando…' : 'Salvar e buscar modelos'}</button>
           </div>
         </form>

@@ -761,14 +761,8 @@ kbd {
 .message-body { color: var(--ink); font-size: 16px; line-height: 1.65; }
 /* Medida de leitura confortável só para a prosa. Código, tabelas e matemática
    usam a coluna inteira — estreitá-los não ajuda ninguém a ler. */
-.message-body-assistant .markdown-body > p,
-.message-body-assistant .markdown-body > ul,
-.message-body-assistant .markdown-body > ol,
-.message-body-assistant .markdown-body > blockquote,
-.message-body-assistant .markdown-body > h1,
-.message-body-assistant .markdown-body > h2,
-.message-body-assistant .markdown-body > h3,
-.message-body-assistant .markdown-body > h4 { max-width: 72ch; }
+.message-body-assistant,
+.message-body-assistant .markdown-body { width: 100%; }
 .message-body-user {
   width: fit-content;
   max-width: min(80%, 620px);
@@ -1269,6 +1263,17 @@ kbd {
 }
 .provider-warning { color: var(--ochre); background: var(--surface); border-left: 3px solid var(--ochre); }
 .provider-error { color: var(--danger); background: var(--danger-tint); }
+.provider-success {
+  margin: 0 0 18px;
+  padding: 11px 13px;
+  border-left: 3px solid var(--wine);
+  border-radius: var(--r-2);
+  color: var(--wine);
+  background: var(--wine-tint);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.provider-form-feedback { margin: 2px 0 0; }
 .provider-warning svg { flex: 0 0 auto; margin-top: 1px; }
 
 .provider-empty { margin: 0; color: var(--ink-3); font-size: 13px; }

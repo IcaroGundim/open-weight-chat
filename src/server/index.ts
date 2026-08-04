@@ -25,6 +25,9 @@ import { estimateContextTokens, estimateTokens, trimContext, type ContextMessage
 import { AppError, errorPayload, normalizeError } from './errors';
 import { streamOpenAICompatible } from './llm-client';
 import { ChatDatabase } from './db/queries';
+import type { ProviderSettingsRecord } from './db/queries';
+import type { ChatDatabaseAdapter } from './db/database';
+import { NeonChatDatabase } from './db/neon';
 import {
   getDefaultModelSelection,
   getModel,
@@ -48,7 +51,7 @@ try {
 }
 
 export interface AppOptions {
-  db?: ChatDatabase;
+  db?: ChatDatabaseAdapter;
   fetchImpl?: typeof fetch;
   staticRoot?: string;
 }
@@ -143,9 +146,9 @@ function routeErrorHandler(error: unknown, c: Context): Response {
  * chaves apenas para a memória do processo. Registro inválido é ignorado em vez
  * de derrubar o catálogo inteiro.
  */
-function refreshRuntimeProviders(db: ChatDatabase): void {
+async function refreshRuntimeProviders(db: ChatDatabaseAdapter): Promise<void> {
   const runtime: RuntimeProvider[] = [];
-  for (const record of db.listProviderSettings()) {
+  for (const record of await db.listProviderSettings()) {
     const parsed = ProviderSettingsInputSchema.safeParse({
       label: record.label,
       baseURL: record.baseURL,
@@ -178,7 +181,7 @@ function refreshRuntimeProviders(db: ChatDatabase): void {
   setRuntimeProviders(runtime);
 }
 
-function toProviderSettings(record: ReturnType<ChatDatabase['listProviderSettings']>[number]): ProviderSettings {
+function toProviderSettings(record: ProviderSettingsRecord): ProviderSettings {
   const models = ProviderSettingsInputSchema.shape.models.safeParse(record.models);
   return {
     id: record.id,
@@ -193,11 +196,19 @@ function toProviderSettings(record: ReturnType<ChatDatabase['listProviderSetting
 }
 
 export function createApp(options: AppOptions = {}): Hono {
-  const db = options.db ?? new ChatDatabase();
+  const db = options.db ?? (process.env.DATABASE_URL
+    ? new NeonChatDatabase(process.env.DATABASE_URL)
+    : new ChatDatabase());
+  const databaseMode = process.env.DATABASE_URL ? 'neon' : 'sqlite';
+  const refreshRuntimePerRequest = !options.db && Boolean(process.env.DATABASE_URL);
   const app = new Hono();
-  refreshRuntimeProviders(db);
+  let runtimeReady = refreshRuntimeProviders(db);
 
   app.use('*', async (c, next) => {
+    // Instâncias quentes da Vercel não compartilham memória. Releia os
+    // provedores do Neon para que uma chave salva em outra instância seja vista.
+    if (refreshRuntimePerRequest) await refreshRuntimeProviders(db);
+    else await runtimeReady;
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header(
@@ -209,8 +220,14 @@ export function createApp(options: AppOptions = {}): Hono {
 
   app.get('/api/models', (c) => c.json(getModelsCatalog()));
 
-  app.get('/api/providers', (c) => c.json({
-    providers: db.listProviderSettings().map(toProviderSettings),
+  app.get('/api/health', (c) => c.json({
+    ok: true as const,
+    database: databaseMode,
+    secretStorage: getSecretStorageStatus(),
+  }));
+
+  app.get('/api/providers', async (c) => c.json({
+    providers: (await db.listProviderSettings()).map(toProviderSettings),
     secretStorage: getSecretStorageStatus(),
   }));
 
@@ -234,7 +251,7 @@ export function createApp(options: AppOptions = {}): Hono {
         apiKeyCipher = encryptSecret(body.apiKey.trim());
       }
 
-      const record = db.upsertProviderSettings({
+      const record = await db.upsertProviderSettings({
         id,
         label: body.label,
         baseURL: body.baseURL,
@@ -242,7 +259,8 @@ export function createApp(options: AppOptions = {}): Hono {
         verifiedAt: body.verifiedAt ?? null,
         apiKeyCipher,
       });
-      refreshRuntimeProviders(db);
+      runtimeReady = refreshRuntimeProviders(db);
+      await runtimeReady;
       return c.json({ provider: toProviderSettings(record) });
     } catch (error) {
       return routeErrorHandler(error, c);
@@ -256,7 +274,7 @@ export function createApp(options: AppOptions = {}): Hono {
       if (!idCheck.success) {
         throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
       }
-      const record = db.listProviderSettings().find((item) => item.id === id);
+      const record = (await db.listProviderSettings()).find((item) => item.id === id);
       if (!record) {
         throw new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' });
       }
@@ -269,47 +287,49 @@ export function createApp(options: AppOptions = {}): Hono {
         getProviderApiKey(provider),
         options.fetchImpl ?? fetch,
       );
-      const updated = db.upsertProviderSettings({
+      const updated = await db.upsertProviderSettings({
         id,
         label: record.label,
         baseURL: record.baseURL,
         models,
         verifiedAt: new Date().toISOString().slice(0, 10),
       });
-      refreshRuntimeProviders(db);
+      runtimeReady = refreshRuntimeProviders(db);
+      await runtimeReady;
       return c.json({ provider: toProviderSettings(updated), discovered: models.length });
     } catch (error) {
       return routeErrorHandler(error, c);
     }
   });
 
-  app.delete('/api/providers/:id', (c) => {
-    const deleted = db.deleteProviderSettings(c.req.param('id'));
+  app.delete('/api/providers/:id', async (c) => {
+    const deleted = await db.deleteProviderSettings(c.req.param('id'));
     if (!deleted) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' }));
-    refreshRuntimeProviders(db);
+    runtimeReady = refreshRuntimeProviders(db);
+    await runtimeReady;
     return c.json({ ok: true as const });
   });
 
-  app.get('/api/analytics/costs', (c) => {
+  app.get('/api/analytics/costs', async (c) => {
     const rawDays = Number(c.req.query('days') ?? 30);
     const days = Number.isFinite(rawDays) ? Math.min(365, Math.max(1, Math.trunc(rawDays))) : 30;
-    return c.json(db.getCostAnalytics(days));
+    return c.json(await db.getCostAnalytics(days));
   });
 
-  app.get('/api/conversations/search', (c) => {
+  app.get('/api/conversations/search', async (c) => {
     const query = c.req.query('q')?.trim() ?? '';
     if (!query) return c.json({ results: [] });
     if (query.length > 200) return jsonError(c, new AppError('UNKNOWN', { status: 400, message: 'A busca pode ter no máximo 200 caracteres.' }));
     try {
-      return c.json({ results: db.searchConversations(query) });
+      return c.json({ results: await db.searchConversations(query) });
     } catch {
       return jsonError(c, new AppError('UNKNOWN', { status: 400, message: 'A expressão de busca não é válida.' }));
     }
   });
 
-  app.get('/api/conversations', (c) => {
+  app.get('/api/conversations', async (c) => {
     const includeArchived = c.req.query('includeArchived') === 'true';
-    return c.json({ conversations: db.listConversations({ includeArchived }) });
+    return c.json({ conversations: await db.listConversations({ includeArchived }) });
   });
 
   app.post('/api/conversations', async (c) => {
@@ -320,7 +340,7 @@ export function createApp(options: AppOptions = {}): Hono {
       const modelId = body.modelId ?? (body.providerId ? getProvider(body.providerId)?.models[0]?.id : defaults.modelId);
       if (!modelId) throw new AppError('MODEL_NOT_FOUND', { status: 404 });
       assertModelSelection(providerId, modelId);
-      const conversation = db.createConversation({
+      const conversation = await db.createConversation({
         title: body.title,
         providerId,
         modelId,
@@ -332,8 +352,8 @@ export function createApp(options: AppOptions = {}): Hono {
     }
   });
 
-  app.get('/api/conversations/:id', (c) => {
-    const conversation = db.getConversation(c.req.param('id'));
+  app.get('/api/conversations/:id', async (c) => {
+    const conversation = await db.getConversation(c.req.param('id'));
     if (!conversation) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
     return c.json({ conversation });
   });
@@ -342,12 +362,12 @@ export function createApp(options: AppOptions = {}): Hono {
     try {
       const id = c.req.param('id');
       const body = await parseJson(c, UpdateConversationSchema);
-      const current = db.getConversation(id);
+      const current = await db.getConversation(id);
       if (!current) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       const providerId = body.providerId ?? current.providerId;
       const modelId = body.modelId ?? current.modelId;
       assertModelSelection(providerId, modelId);
-      const conversation = db.updateConversation(id, { ...body, providerId, modelId });
+      const conversation = await db.updateConversation(id, { ...body, providerId, modelId });
       if (!conversation) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       return c.json({ conversation });
     } catch (error) {
@@ -355,32 +375,32 @@ export function createApp(options: AppOptions = {}): Hono {
     }
   });
 
-  app.delete('/api/conversations/:id', (c) => {
-    const deleted = db.deleteConversation(c.req.param('id'));
+  app.delete('/api/conversations/:id', async (c) => {
+    const deleted = await db.deleteConversation(c.req.param('id'));
     if (!deleted) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
     return c.json({ ok: true as const });
   });
 
-  app.get('/api/conversations/:id/messages', (c) => {
+  app.get('/api/conversations/:id/messages', async (c) => {
     const id = c.req.param('id');
-    if (!db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
-    return c.json({ messages: db.getMessages(id) });
+    if (!await db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
+    return c.json({ messages: await db.getMessages(id) });
   });
 
-  app.get('/api/conversations/:id/artifacts', (c) => {
+  app.get('/api/conversations/:id/artifacts', async (c) => {
     const id = c.req.param('id');
-    if (!db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
-    return c.json({ artifacts: db.getArtifacts(id) });
+    if (!await db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
+    return c.json({ artifacts: await db.getArtifacts(id) });
   });
 
-  app.get('/api/conversations/:id/artifacts/:slug/versions/:version', (c) => {
+  app.get('/api/conversations/:id/artifacts/:slug/versions/:version', async (c) => {
     const id = c.req.param('id');
-    if (!db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
+    if (!await db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
     const version = Number(c.req.param('version'));
     if (!Number.isSafeInteger(version) || version < 1) {
       return jsonError(c, new AppError('UNKNOWN', { status: 400, message: 'A versão do artefato é inválida.' }));
     }
-    const artifactVersion = db.getArtifactVersion(id, c.req.param('slug'), version);
+    const artifactVersion = await db.getArtifactVersion(id, c.req.param('slug'), version);
     if (!artifactVersion) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Versão do artefato não encontrada.' }));
     return c.json({ version: artifactVersion });
   });
@@ -390,21 +410,21 @@ export function createApp(options: AppOptions = {}): Hono {
     try {
       request = await parseJson(c, ChatRequestSchema);
       const selection = assertModelSelection(request.providerId, request.modelId);
-      let conversation = request.conversationId ? db.getConversation(request.conversationId) : null;
+      let conversation = request.conversationId ? await db.getConversation(request.conversationId) : null;
       if (request.conversationId && !conversation) {
         throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       }
       if (!conversation) {
-        conversation = db.createConversation({ providerId: selection.providerId, modelId: selection.model.id });
+        conversation = await db.createConversation({ providerId: selection.providerId, modelId: selection.model.id });
       } else if (conversation.providerId !== selection.providerId || conversation.modelId !== selection.model.id) {
-        conversation = db.updateConversation(conversation.id, {
+        conversation = await db.updateConversation(conversation.id, {
           providerId: selection.providerId,
           modelId: selection.model.id,
         });
         if (!conversation) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       }
 
-      db.insertMessage({
+      await db.insertMessage({
         conversationId: conversation.id,
         role: 'user',
         content: request.content,
@@ -413,12 +433,12 @@ export function createApp(options: AppOptions = {}): Hono {
       });
       const context = requestContext(
         conversation.systemPrompt,
-        db.getMessages(conversation.id),
-        db.getArtifacts(conversation.id),
+        await db.getMessages(conversation.id),
+        await db.getArtifacts(conversation.id),
         selection.model.ctx,
       );
       const promptText = context.messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-      const assistant = db.insertMessage({
+      const assistant = await db.insertMessage({
         conversationId: conversation.id,
         role: 'assistant',
         content: '',
@@ -455,10 +475,10 @@ export function createApp(options: AppOptions = {}): Hono {
       const completedArtifactEnds: Array<{ slug: string; version: number; truncated: boolean }> = [];
       let parserEnded = false;
 
-      const persistPartial = (force = false) => {
+      const persistPartial = async (force = false) => {
         const now = Date.now();
-        if (!force && now - lastPersistedAt < 250 && content.length - lastPersistedLength < 1_000) return;
-        db.updateMessage(assistant.id, { content, reasoning });
+        if (!force && now - lastPersistedAt < 2_000 && content.length - lastPersistedLength < 4_000) return;
+        await db.updateMessage(assistant.id, { content, reasoning });
         lastPersistedAt = now;
         lastPersistedLength = content.length;
       };
@@ -483,8 +503,8 @@ export function createApp(options: AppOptions = {}): Hono {
             continue;
           }
           if (parserEvent.kind === 'artifact_open') {
-            const existing = db.getArtifacts(conversation.id).find((artifact) => artifact.slug === parserEvent.slug);
-            const artifact = db.upsertArtifact({
+            const existing = (await db.getArtifacts(conversation.id)).find((artifact) => artifact.slug === parserEvent.slug);
+            const artifact = await db.upsertArtifact({
               conversationId: conversation.id,
               slug: parserEvent.slug,
               kind: parserEvent.type,
@@ -531,7 +551,7 @@ export function createApp(options: AppOptions = {}): Hono {
             const open = openArtifacts.get(parserEvent.slug);
             const body = artifactBuffers.get(parserEvent.slug) ?? '';
             if (open) {
-              db.insertArtifactVersion({
+              await db.insertArtifactVersion({
                 conversationId: conversation.id,
                 slug: parserEvent.slug,
                 kind: open.kind,
@@ -556,7 +576,7 @@ export function createApp(options: AppOptions = {}): Hono {
             artifactBuffers.delete(parserEvent.slug);
             continue;
           }
-          const current = db.getArtifacts(conversation.id).find((artifact) => artifact.slug === parserEvent.slug);
+          const current = (await db.getArtifacts(conversation.id)).find((artifact) => artifact.slug === parserEvent.slug);
           const currentVersion = current?.versions.find((version) => version.version === current.currentVersion);
           if (!current || !currentVersion) {
             await emit(stream, {
@@ -580,7 +600,7 @@ export function createApp(options: AppOptions = {}): Hono {
           }
           const version = current.currentVersion + 1;
           const patchText = parserEvent.edits.map((edit) => `${edit.find}\n${edit.replace}`).join('\n');
-          db.insertArtifactVersion({
+          await db.insertArtifactVersion({
             conversationId: conversation.id,
             slug: parserEvent.slug,
             kind: current.kind,
@@ -622,25 +642,25 @@ export function createApp(options: AppOptions = {}): Hono {
 
       const completionText = () => `${content}${[...artifactBuffers.values()].join('')}${producedVersions.map((item) => item.completionText).join('')}`;
 
-      const attributeArtifactCost = (completionTokens: number, totalCost: number | null) => {
+      const attributeArtifactCost = async (completionTokens: number, totalCost: number | null) => {
         if (producedVersions.length === 0) return;
         const sizes = producedVersions.map((item) => item.costBasisTokens);
         const totalSize = sizes.reduce((sum, size) => sum + size, 0);
-        producedVersions.forEach((item, index) => {
+        await Promise.all(producedVersions.map(async (item, index) => {
           const share = sizes[index] / totalSize;
-          db.updateArtifactVersionCost(
+          await db.updateArtifactVersionCost(
             conversation.id,
             item.slug,
             item.version,
             Math.max(0, Math.round(completionTokens * share)),
             totalCost === null ? null : Number((totalCost * share).toFixed(8)),
           );
-        });
+        }));
       };
 
       const emitArtifactEnds = async (stream: Parameters<typeof streamSSE>[1] extends (stream: infer T) => Promise<void> ? T : never) => {
         for (const completed of completedArtifactEnds) {
-          const version = db.getArtifactVersion(conversation.id, completed.slug, completed.version);
+          const version = await db.getArtifactVersion(conversation.id, completed.slug, completed.version);
           await emit(stream, {
             type: 'artifact_end',
             slug: completed.slug,
@@ -673,7 +693,7 @@ export function createApp(options: AppOptions = {}): Hono {
             })) {
               if (event.kind === 'text') {
                 await consumeParserEvents(parser.push(event.text), stream);
-                persistPartial();
+                await persistPartial();
               } else if (event.kind === 'reasoning') {
                 reasoning += event.reasoning;
                 if (!stream.aborted) {
@@ -684,7 +704,7 @@ export function createApp(options: AppOptions = {}): Hono {
                     messageId: assistant.id,
                   });
                 }
-                persistPartial();
+                await persistPartial();
               } else if (event.kind === 'usage') {
                 rawUsage = event.usage;
               } else if (event.kind === 'finish') {
@@ -699,10 +719,10 @@ export function createApp(options: AppOptions = {}): Hono {
               completionText: completionText(),
               reasoningText: reasoning,
             });
-            attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
+            await attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
             await emitArtifactEnds(stream);
             finishReason = finishReason ?? 'stop';
-            db.updateMessage(assistant.id, {
+            await db.updateMessage(assistant.id, {
               content,
               reasoning,
               usage: calculated.usage,
@@ -739,10 +759,10 @@ export function createApp(options: AppOptions = {}): Hono {
               completionText: completionText(),
               reasoningText: reasoning,
             });
-            attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
+            await attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
             await emitArtifactEnds(stream);
             const terminalReason = aborted ? 'aborted' : 'error';
-            db.updateMessage(assistant.id, {
+            await db.updateMessage(assistant.id, {
               content,
               reasoning,
               usage: calculated.usage,
@@ -770,7 +790,7 @@ export function createApp(options: AppOptions = {}): Hono {
               });
             }
           } finally {
-            persistPartial(true);
+            await persistPartial(true);
             requestSignal.removeEventListener('abort', abortFromClient);
             if (!upstreamController.signal.aborted && (clientAborted || stream.aborted)) upstreamController.abort();
           }

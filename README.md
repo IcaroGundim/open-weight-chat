@@ -21,6 +21,38 @@ pnpm build
 node dist/server.js
 ```
 
+## Deploy na Vercel com Neon
+
+O projeto usa SQLite quando `DATABASE_URL` não existe e troca automaticamente
+para o Neon na Vercel. O handler em `api/[...route].ts` mantém todas as rotas
+`/api/*` na mesma origem do frontend e preserva o streaming SSE.
+
+No painel **Vercel → Project → Settings → Environment Variables**, configure:
+
+| Variável | Valor |
+|---|---|
+| `DATABASE_URL` | Connection string com pooling copiada em **Neon → Connect** |
+| `PROVIDER_SECRET_KEY` | Segredo aleatório estável, com pelo menos 16 caracteres |
+
+`PROVIDER_SECRET_KEY` não é uma chave de provedor. Ela cifra as chaves de
+OpenRouter, DeepSeek etc. guardadas no Neon e precisa permanecer igual entre
+deploys. Para gerar uma no PowerShell sem exibi-la no histórico do shell:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+Copie o resultado diretamente para a variável da Vercel. Depois, faça um novo
+deploy e cadastre novamente os provedores em **Configurações → Provedores**;
+as configurações do SQLite local não são copiadas automaticamente para o Neon.
+
+Depois do deploy, abra `https://SEU-PROJETO.vercel.app/api/health`. O resultado
+correto contém `"database":"neon"` e `"secretStorage":{"available":true}`.
+
+O primeiro acesso cria as tabelas necessárias no banco. Para uso público,
+ative também **Vercel Deployment Protection** ou outra autenticação: sem isso,
+qualquer pessoa com a URL pode consumir o saldo das APIs configuradas.
+
 O banco é criado em `chat.db`, usa WAL/FTS5 e é ignorado pelo Git.
 
 > ⚠️ **Os preços deste repositório não são autoritativos.** O catálogo de modelos e preços está centralizado em [providers.config.ts](src/server/providers.config.ts) e foi lido em 04/08/2026 — os valores do DeepSeek em particular vieram de busca, não da documentação oficial, e divergem do que o OpenRouter publica. Provedores reprecificam e aposentam IDs com frequência (`deepseek-chat` sumiu do catálogo em julho/2026). **Revalide antes de usar qualquer número como projeção de custo.** A procedência de cada valor está em [PLANO.md §13](PLANO.md).

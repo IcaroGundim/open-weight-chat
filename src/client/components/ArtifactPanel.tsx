@@ -2,7 +2,7 @@ import { Check, Copy, Download, FileCode2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ArtifactRenderer } from '../render/ArtifactRenderer';
 import { useChatStore } from '../store/chat';
-import type { Artifact, ArtifactKind } from '../types';
+import { EMPTY_ARTIFACTS, type Artifact, type ArtifactKind } from '../types';
 
 type ArtifactPanelProps = {
   conversationId: string;
@@ -48,7 +48,7 @@ function extensionFor(artifact: Artifact): string {
 
 export function ArtifactPanel({ conversationId, onClose }: ArtifactPanelProps) {
   const selection = useChatStore((state) => state.openArtifactSelection);
-  const artifacts = useChatStore((state) => state.artifactsByConversation[conversationId] ?? []);
+  const artifacts = useChatStore((state) => state.artifactsByConversation[conversationId] ?? EMPTY_ARTIFACTS);
   const loadArtifacts = useChatStore((state) => state.loadArtifacts);
   const selectArtifactVersion = useChatStore((state) => state.selectArtifactVersion);
   const artifact = artifacts.find((item) => item.slug === selection?.slug);
