@@ -161,7 +161,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadModels: async () => {
     set({ isLoadingModels: true, error: null });
     try {
-      const models = await getModels();
+      const { models, configErrors } = await getModels();
       const current = get().selectedModelId;
       const configuredModels = models.filter((model) => model.configured !== false);
       const selectedModelId = models.some((model) => model.id === current && model.configured !== false)
@@ -174,7 +174,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           window.localStorage.removeItem(SELECTED_MODEL_STORAGE_KEY);
         }
       }
-      set({ models, selectedModelId, isLoadingModels: false });
+      // Provedor personalizado mal configurado nunca falha em silêncio: o
+      // usuário precisa saber que declarou algo e que não entrou.
+      const configError = configErrors.length > 0
+        ? `Provedor personalizado ignorado — ${configErrors.join(' · ')}`
+        : null;
+      set({ models, selectedModelId, isLoadingModels: false, error: configError });
     } catch (error) {
       set({ models: [], isLoadingModels: false, error: errorMessage(error) });
     }

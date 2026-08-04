@@ -350,15 +350,17 @@ async function requestJson<T = unknown>(path: string, init?: RequestInit): Promi
   return payload as T;
 }
 
-export async function getModels(): Promise<ModelOption[]> {
+export async function getModels(): Promise<{ models: ModelOption[]; configErrors: string[] }> {
   const payload = await requestJson('/api/models', { headers: { Accept: 'application/json' } });
   const models = normalizeModels(payload);
+  const rawErrors = isRecord(payload) && Array.isArray(payload.configErrors) ? payload.configErrors : [];
+  const configErrors = rawErrors.map((value) => asString(value)).filter((value) => value.length > 0);
   const defaultModelId = isRecord(payload) ? asString(payload.defaultModelId) : '';
-  if (!defaultModelId) return models;
-  const defaultIndex = models.findIndex((model) => model.id === defaultModelId);
-  return defaultIndex > 0
+  const defaultIndex = defaultModelId ? models.findIndex((model) => model.id === defaultModelId) : -1;
+  const ordered = defaultIndex > 0
     ? [models[defaultIndex], ...models.slice(0, defaultIndex), ...models.slice(defaultIndex + 1)]
     : models;
+  return { models: ordered, configErrors };
 }
 
 export async function getCostAnalytics(days = 30): Promise<CostAnalytics> {

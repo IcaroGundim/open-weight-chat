@@ -1,12 +1,19 @@
 import { z } from 'zod';
 
-export const ProviderIdSchema = z.enum([
-  'deepseek',
-  'glm',
-  'kimi',
-  'openrouter',
-  'ollama',
-]);
+export const BUILTIN_PROVIDER_IDS = ['deepseek', 'glm', 'kimi', 'openrouter', 'ollama'] as const;
+export type BuiltinProviderId = (typeof BUILTIN_PROVIDER_IDS)[number];
+
+/**
+ * Provedores personalizados são declarados em tempo de execução, então o id é
+ * validado por formato e não por lista fechada. Conversas antigas continuam
+ * válidas mesmo que o provedor que as criou saia da configuração.
+ */
+export const ProviderIdSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9][a-z0-9-]{0,31}$/u,
+    'O id do provedor deve ter de 1 a 32 caracteres: minúsculas, dígitos e hífen.',
+  );
 export type ProviderId = z.infer<typeof ProviderIdSchema>;
 
 export const MessageRoleSchema = z.enum(['system', 'user', 'assistant']);
@@ -172,6 +179,8 @@ export const ProviderCatalogSchema = z.object({
   configured: z.boolean(),
   verifiedAt: z.string(),
   stale: z.boolean(),
+  /** 'custom' identifica provedores vindos da configuração do usuário. */
+  source: z.enum(['builtin', 'custom']),
   models: z.array(ModelCatalogItemSchema),
 });
 export type ProviderCatalog = z.infer<typeof ProviderCatalogSchema>;
@@ -180,6 +189,11 @@ export const ModelsResponseSchema = z.object({
   providers: z.array(ProviderCatalogSchema),
   defaultProviderId: ProviderIdSchema,
   defaultModelId: z.string().min(1),
+  /**
+   * Erros de configuração de provedores personalizados. Nunca são silenciosos:
+   * uma entrada inválida aparece aqui e a interface mostra ao usuário.
+   */
+  configErrors: z.array(z.string()),
 });
 export type ModelsResponse = z.infer<typeof ModelsResponseSchema>;
 

@@ -25,6 +25,44 @@ O banco é criado em `chat.db`, usa WAL/FTS5 e é ignorado pelo Git.
 
 > ⚠️ **Os preços deste repositório não são autoritativos.** O catálogo de modelos e preços está centralizado em [providers.config.ts](src/server/providers.config.ts) e foi lido em 04/08/2026 — os valores do DeepSeek em particular vieram de busca, não da documentação oficial, e divergem do que o OpenRouter publica. Provedores reprecificam e aposentam IDs com frequência (`deepseek-chat` sumiu do catálogo em julho/2026). **Revalide antes de usar qualquer número como projeção de custo.** A procedência de cada valor está em [PLANO.md §13](PLANO.md).
 
+## Conectar outros provedores
+
+Além dos cinco embutidos (DeepSeek, GLM/Z.ai, Kimi, OpenRouter e Ollama), **qualquer endpoint OpenAI-compatível pode ser ligado sem tocar em código** — OpenCode Zen, Groq, Together, Fireworks, um `llama.cpp` na sua rede. O cliente de streaming é um só; o que muda é `baseURL`, chave e id de modelo.
+
+Duas formas, que podem coexistir:
+
+| Onde | Quando usar |
+|---|---|
+| `providers.local.json` na raiz | Desenvolvimento — cabe indentado. Está no `.gitignore`. |
+| Variável `CUSTOM_PROVIDERS` (mesmo JSON, uma linha) | Deploy em plataformas que só aceitam variáveis de ambiente. |
+
+```json
+[
+  {
+    "id": "opencode",
+    "label": "OpenCode Zen",
+    "baseURL": "https://opencode.ai/zen/v1",
+    "apiKeyEnv": "OPENCODE_API_KEY",
+    "verifiedAt": "2026-08-04",
+    "models": [
+      {
+        "id": "COLOQUE-O-ID-DA-API",
+        "label": "GPT 5.6 Luna",
+        "ctx": 272000,
+        "reasoning": true,
+        "pricing": { "inputPerMillion": 0.2, "outputPerMillion": 1.2 }
+      }
+    ]
+  }
+]
+```
+
+Três regras que o validador aplica, todas com erro visível na interface — nada falha em silêncio:
+
+- **A chave nunca entra no JSON.** Entra o *nome* da variável de ambiente em `apiKeyEnv`; a chave em si vai para o `.env`. Um campo `apiKey` faz o provedor ser recusado.
+- **`ctx` é obrigatório.** É ele que dirige o corte de histórico; um valor ausente ou errado quebraria o truncamento em silêncio.
+- **`pricing` é opcional.** Sem ele o custo aparece como indisponível — honesto — em vez de zero, que seria mentira. Sem `verifiedAt`, o provedor entra marcado como não verificado.
+
 ## Documentos
 
 | Arquivo | Conteúdo |

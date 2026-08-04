@@ -1,4 +1,5 @@
 import type { ModelPricing, ModelsResponse, ProviderCatalog, ProviderId } from '../shared/types';
+import { getCustomProviders, resetCustomProvidersCache } from './providers.custom';
 
 export interface ProviderModelConfig {
   readonly id: string;
@@ -215,9 +216,45 @@ function isStale(verifiedAt: string, now = new Date()): boolean {
   return age > STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
 }
 
+interface MergedProviders {
+  readonly byId: ReadonlyMap<string, ProviderConfig>;
+  readonly customIds: ReadonlySet<string>;
+  readonly errors: readonly string[];
+}
+
+let mergedCache: MergedProviders | null = null;
+
+/**
+ * Visão única sobre embutidos + personalizados. Todo acesso a provedor passa
+ * por aqui; ninguém deve ler PROVIDERS diretamente fora deste módulo.
+ */
+function getMergedProviders(): MergedProviders {
+  if (mergedCache) return mergedCache;
+  const custom = getCustomProviders();
+  const byId = new Map<string, ProviderConfig>();
+  for (const provider of Object.values(PROVIDERS)) byId.set(provider.id, provider);
+  const customIds = new Set<string>();
+  for (const provider of custom.providers) {
+    byId.set(provider.id, provider);
+    customIds.add(provider.id);
+  }
+  mergedCache = { byId, customIds, errors: custom.errors };
+  return mergedCache;
+}
+
+/** Apenas para testes: relê o ambiente na próxima chamada. */
+export function resetProvidersCache(): void {
+  mergedCache = null;
+  resetCustomProvidersCache();
+}
+
 export function getProvider(providerId: string): ProviderConfig | undefined {
-  if (!Object.prototype.hasOwnProperty.call(PROVIDERS, providerId)) return undefined;
-  return PROVIDERS[providerId as ProviderId];
+  return getMergedProviders().byId.get(providerId);
+}
+
+/** Erros de configuração de provedores personalizados, para exibição. */
+export function getProviderConfigErrors(): readonly string[] {
+  return getMergedProviders().errors;
 }
 
 export function getModel(providerId: string, modelId: string): ProviderModelConfig | undefined {
@@ -249,12 +286,14 @@ export function getDefaultModelSelection(): { providerId: ProviderId; modelId: s
 }
 
 export function getModelsCatalog(now = new Date()): ModelsResponse {
-  const providers = Object.values(PROVIDERS).map<ProviderCatalog>((provider) => ({
+  const merged = getMergedProviders();
+  const providers = [...merged.byId.values()].map<ProviderCatalog>((provider) => ({
     id: provider.id,
     label: provider.label,
     configured: isConfigured(provider),
     verifiedAt: provider.verifiedAt,
     stale: isStale(provider.verifiedAt, now),
+    source: merged.customIds.has(provider.id) ? 'custom' : 'builtin',
     models: provider.models.map((model) => ({
       id: model.id,
       label: model.label,
@@ -264,5 +303,10 @@ export function getModelsCatalog(now = new Date()): ModelsResponse {
     })),
   }));
   const defaults = getDefaultModelSelection();
-  return { providers, defaultProviderId: defaults.providerId, defaultModelId: defaults.modelId };
+  return {
+    providers,
+    defaultProviderId: defaults.providerId,
+    defaultModelId: defaults.modelId,
+    configErrors: [...merged.errors],
+  };
 }

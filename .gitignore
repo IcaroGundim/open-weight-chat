@@ -9,3 +9,6 @@ chat.db-wal
 # ferramentas locais de agente, fora do repositorio publico
 .commandcode/
 .claude/
+
+# provedores personalizados: pode conter endpoints privados
+providers.local.json
