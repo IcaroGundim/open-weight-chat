@@ -6,7 +6,6 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import {
-  BUILTIN_PROVIDER_IDS,
   ChatRequestSchema,
   CreateConversationSchema,
   ProviderIdSchema,
@@ -222,12 +221,6 @@ export function createApp(options: AppOptions = {}): Hono {
       if (!idCheck.success) {
         throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
       }
-      if ((BUILTIN_PROVIDER_IDS as readonly string[]).includes(id)) {
-        throw new AppError('UNKNOWN', {
-          status: 400,
-          message: `O id "${id}" pertence a um provedor embutido. Escolha outro id.`,
-        });
-      }
       const body = await parseJson(c, ProviderSettingsInputSchema);
 
       let apiKeyCipher: string | null | undefined;
@@ -263,13 +256,6 @@ export function createApp(options: AppOptions = {}): Hono {
       if (!idCheck.success) {
         throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
       }
-      if ((BUILTIN_PROVIDER_IDS as readonly string[]).includes(id)) {
-        throw new AppError('UNKNOWN', {
-          status: 400,
-          message: `O id "${id}" pertence a um provedor embutido.`,
-        });
-      }
-
       const record = db.listProviderSettings().find((item) => item.id === id);
       if (!record) {
         throw new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' });

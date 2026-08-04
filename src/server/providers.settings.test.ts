@@ -106,6 +106,47 @@ describe('cadastro de provedor pela interface', () => {
     expect((await (await app.request('/api/models')).json()).providers.find((item: { id: string }) => item.id === 'opencode').models).toHaveLength(2);
   });
 
+  it('configura um provedor embutido pela web e substitui o catálogo ao descobrir modelos', async () => {
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    const app = createApp({
+      db: database,
+      fetchImpl: async (input, init) => {
+        requests.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get('authorization'),
+        });
+        return new Response(JSON.stringify({
+          data: [{ id: 'openrouter/modelo-real', name: 'Modelo real', context_length: 256_000 }],
+        }), { headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    const saved = await app.request('/api/providers/openrouter', json({
+      label: 'OpenRouter',
+      baseURL: 'https://openrouter.ai/api/v1',
+      models: [],
+      apiKey: 'sk-openrouter-real',
+    }));
+    expect(saved.status).toBe(200);
+
+    const discovered = await app.request('/api/providers/openrouter/discover-models', { method: 'POST' });
+    expect(discovered.status).toBe(200);
+    expect((await discovered.json()).provider.models).toEqual([
+      expect.objectContaining({ id: 'openrouter/modelo-real', ctx: 256_000 }),
+    ]);
+    expect(requests).toEqual([{
+      url: 'https://openrouter.ai/api/v1/models',
+      authorization: 'Bearer sk-openrouter-real',
+    }]);
+
+    const catalog = await (await app.request('/api/models')).json();
+    const provider = catalog.providers.find((item: { id: string }) => item.id === 'openrouter');
+    expect(provider.source).toBe('builtin');
+    expect(provider.models).toEqual([
+      expect.objectContaining({ id: 'openrouter/modelo-real', contextWindow: 256_000 }),
+    ]);
+  });
+
   it('gera a chave-mestra automaticamente quando o cadastro vem pela web', async () => {
     delete process.env.PROVIDER_SECRET_KEY;
     const app = createApp({ db: database });
@@ -130,12 +171,17 @@ describe('cadastro de provedor pela interface', () => {
     expect(database.listProviderSettings()[0].apiKeyCipher).toBeNull();
   });
 
-  it('recusa id de provedor embutido nomeando o id', async () => {
+  it('permite configurar um provedor embutido pela interface', async () => {
     const app = createApp({ db: database });
-    const response = await app.request('/api/providers/deepseek', json(PROVIDER));
-    expect(response.status).toBe(400);
-    expect((await response.json()).error.message).toContain('deepseek');
+    const response = await app.request('/api/providers/deepseek', json({
+      label: 'DeepSeek',
+      baseURL: 'https://api.deepseek.com/v1',
+      models: [{ id: 'deepseek-v4-flash', ctx: 1_048_576 }],
+      apiKey: 'sk-deepseek-real',
+    }));
+    expect(response.status).toBe(200);
     expect(getProvider('deepseek')?.baseURL).toBe('https://api.deepseek.com/v1');
+    expect(getProviderApiKey(getProvider('deepseek')!)).toBe('sk-deepseek-real');
   });
 
   it('recusa modelo sem janela de contexto', async () => {

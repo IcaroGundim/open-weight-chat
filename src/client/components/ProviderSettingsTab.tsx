@@ -26,6 +26,16 @@ function contextLabel(value: number): string {
   return `${new Intl.NumberFormat('pt-BR').format(value)} tokens`;
 }
 
+function normalizeProviderId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/gu, '-')
+    .replace(/-{2,}/gu, '-')
+    .replace(/^-+/u, '')
+    .slice(0, 32);
+}
+
 function reasonMessage(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
 }
@@ -90,13 +100,14 @@ export function ProviderSettingsTab() {
     event.preventDefault();
     if (!draft) return;
 
-    const id = draft.id.trim();
+    const id = editingId ? draft.id.trim() : normalizeProviderId(draft.id);
     const label = draft.label.trim();
     const baseURL = draft.baseURL.trim();
     if (!id || !label || !baseURL) {
       setError('Preencha o identificador, o nome e a URL base do provedor.');
       return;
     }
+    if (!editingId && id !== draft.id) setDraft({ ...draft, id });
 
     setSaving(true);
     setError(null);
@@ -192,12 +203,12 @@ export function ProviderSettingsTab() {
         </div>
       ) : null}
 
-      {error ? <p className="provider-error" role="alert">{error}</p> : null}
+      {error && !draft ? <p className="provider-error" role="alert">{error}</p> : null}
 
       <div className="settings-group">
         <div className="settings-group-heading">
           <strong>Provedores cadastrados</strong>
-          <span>Somam-se aos embutidos, sem substituí-los.</span>
+          <span>Inclui provedores novos e configurações dos embutidos.</span>
         </div>
 
         {providers.length === 0 ? (
@@ -262,9 +273,10 @@ export function ProviderSettingsTab() {
 
       {draft ? (
         <form className="settings-group provider-form" onSubmit={(event) => void submit(event)}>
+          {error ? <p className="provider-error" role="alert">{error}</p> : null}
           <div className="settings-group-heading">
             <strong>{editingId ? `Editar ${editingId}` : 'Novo provedor'}</strong>
-            <span>Use um identificador próprio; ids dos provedores embutidos não podem ser reutilizados.</span>
+            <span>Use minúsculas, números e hífen. Para configurar um provedor embutido, use o identificador dele, como <code>openrouter</code>.</span>
           </div>
 
           <div className="provider-grid">
@@ -275,8 +287,10 @@ export function ProviderSettingsTab() {
                 onChange={(event) => setDraft({ ...draft, id: event.target.value })}
                 readOnly={Boolean(editingId)}
                 placeholder="opencode"
+                pattern="[a-zA-Z0-9][a-zA-Z0-9 -]{0,31}"
                 required
               />
+              <small className="provider-field-hint">O identificador é normalizado para minúsculas ao salvar.</small>
             </label>
             <label className="provider-field">
               <span>Nome</span>

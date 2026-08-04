@@ -256,13 +256,12 @@ function getMergedProviders(): MergedProviders {
     byId.set(provider.id, provider);
     customIds.add(provider.id);
   }
-  // Cadastro pela interface tem a última palavra sobre arquivo e variável de
-  // ambiente, mas nunca sobre um provedor embutido — a validação de escrita
-  // recusa esses ids antes de chegar aqui.
+  // Cadastro pela interface tem a última palavra sobre arquivo, variável de
+  // ambiente e também sobre o catálogo embutido. Isso permite configurar pela
+  // web um provedor que já vem no aplicativo, como o OpenRouter, sem duplicá-lo.
   for (const { config } of runtimeProviders) {
-    if (Object.prototype.hasOwnProperty.call(PROVIDERS, config.id)) continue;
     byId.set(config.id, config);
-    customIds.add(config.id);
+    if (!Object.prototype.hasOwnProperty.call(PROVIDERS, config.id)) customIds.add(config.id);
   }
   mergedCache = { byId, customIds, errors: custom.errors };
   return mergedCache;
