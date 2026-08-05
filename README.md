@@ -86,7 +86,7 @@ Se já existe um deploy com dados (conversas e provedores com chaves no formato 
 
 > ⚠️ **NUNCA troque `PROVIDER_SECRET_KEY` depois de haver chaves `v2` no banco.** As chaves são cifradas com ela (AES-256-GCM) e não poderão mais ser decifradas. A migração `v1 → v2` valida cada chave antes de recifrar e aborta sem alterações se alguma falhar — mas isso protege só a migração; uma troca posterior é irrecuperável.
 
-> ⚠️ **Os preços deste repositório não são autoritativos.** O catálogo de modelos e preços está centralizado em [providers.config.ts](src/server/providers.config.ts) e foi lido em 04/08/2026 — os valores do DeepSeek em particular vieram de busca, não da documentação oficial, e divergem do que o OpenRouter publica. Provedores reprecificam e aposentam IDs com frequência (`deepseek-chat` sumiu do catálogo em julho/2026). **Revalide antes de usar qualquer número como projeção de custo.** A procedência de cada valor está em [PLANO.md §13](PLANO.md).
+> ⚠️ **Os preços deste repositório não são autoritativos.** O catálogo de modelos e preços está centralizado em [providers.config.ts](src/server/providers.config.ts) e foi lido em 04/08/2026 — os valores do DeepSeek em particular vieram de busca, não da documentação oficial, e divergem do que o OpenRouter publica. Provedores reprecificam e aposentam IDs com frequência (`deepseek-chat` sumiu do catálogo em julho/2026). **Revalide antes de usar qualquer número como projeção de custo.** A procedência de cada valor está em [PLANO.md §13](docs/PLANO.md).
 
 ## Conectar outros provedores
 
@@ -153,10 +153,12 @@ Para proteger o custo de cada conta (BYOK), o servidor aplica limites por usuár
 
 | Arquivo | Conteúdo |
 |---|---|
-| [PLANO.md](PLANO.md) | Decisões de arquitetura, provedores, custo e o roteiro original |
-| [PLANO-MULTIUSUARIO.md](PLANO-MULTIUSUARIO.md) | Especificação do serviço multiusuário: Clerk, isolamento, cifragem v2, migração e deploy |
-| [DESIGN.md](DESIGN.md) | Direção visual: tokens, regras, componentes e o porquê de cada escolha |
-| [PLANO-ARTEFATOS.md](PLANO-ARTEFATOS.md) | Especificação da funcionalidade de artefatos |
+| [docs/PLANO.md](docs/PLANO.md) | Decisões de arquitetura, provedores, custo e o roteiro original |
+| [docs/PLANO-MULTIUSUARIO.md](docs/PLANO-MULTIUSUARIO.md) | Especificação do serviço multiusuário: Clerk, isolamento, cifragem v2, migração e deploy |
+| [docs/DESIGN.md](docs/DESIGN.md) | Direção visual: tokens, regras, componentes e o porquê de cada escolha |
+| [docs/PLANO-ARTEFATOS.md](docs/PLANO-ARTEFATOS.md) | Especificação da funcionalidade de artefatos |
+| [docs/PLANO-VERCEL-NEON.md](docs/PLANO-VERCEL-NEON.md) | Handoff do deploy na Vercel com Neon: banco assíncrono e função sem estado |
+| [CLAUDE.md](CLAUDE.md) | Memória do projeto para agentes: comandos, arquitetura e armadilhas conhecidas |
 
 ## Verificações
 
@@ -167,6 +169,6 @@ pnpm build
 pnpm design
 ```
 
-A direção visual — paleta, tipografia, componentes, regras e as decisões por trás delas — está em [DESIGN.md](DESIGN.md). `pnpm design` verifica contraste (`scripts/contrast.mjs`) e as proibições do sistema (`scripts/audit-design.mjs`).
+A direção visual — paleta, tipografia, componentes, regras e as decisões por trás delas — está em [docs/DESIGN.md](docs/DESIGN.md). `pnpm design` verifica contraste (`scripts/contrast.mjs`) e as proibições do sistema (`scripts/audit-design.mjs`).
 
 O frontend usa `react-markdown` como fallback seguro, com `remark-math`/KaTeX lazy e Shiki lazy com engine JavaScript e linguagens curadas. HTML cru não é habilitado, links externos recebem `noopener noreferrer nofollow` e o CSP é aplicado pelo Hono, incluindo a origem do Clerk em `script-src`, `connect-src` e `frame-src`.

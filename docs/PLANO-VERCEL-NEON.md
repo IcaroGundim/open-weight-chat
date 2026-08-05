@@ -144,7 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_artifact_versions_tsv ON artifact_versions USING 
 
 ## 3. Busca: FTS5 → `tsvector`
 
-`escapeFtsQuery` ([`queries.ts:331`](src/server/db/queries.ts)) existe para domar a sintaxe do FTS5. Em Postgres ele **sai inteiro** e é substituído por `websearch_to_tsquery('portuguese', $1)`, que aceita entrada de usuário crua com semântica de buscador (aspas, `or`, `-`) e não explode com caracteres especiais.
+`escapeFtsQuery` ([`queries.ts:331`](../src/server/db/queries.ts)) existe para domar a sintaxe do FTS5. Em Postgres ele **sai inteiro** e é substituído por `websearch_to_tsquery('portuguese', $1)`, que aceita entrada de usuário crua com semântica de buscador (aspas, `or`, `-`) e não explode com caracteres especiais.
 
 O `searchConversations` mantém a mesma forma — união dos dois índices, com o `JOIN` que filtra pela versão corrente do artefato (a regra de deduplicação de [PLANO-ARTEFATOS.md §4.2](PLANO-ARTEFATOS.md)):
 
@@ -178,7 +178,7 @@ Remova `escapeFtsQuery` e o teste que o cobre; acrescente um teste que passa `"a
 | `src/server/index.ts` | **toda rota** vira `await`; o laço de `/api/chat` já é `async`, mas `db.insertMessage`, `db.updateMessage`, `db.upsertArtifact`, `db.insertArtifactVersion`, `db.getArtifacts` passam a exigir `await` dentro de `consumeParserEvents` |
 | testes de servidor | `queries.test.ts`, `artifacts.test.ts`, `index.test.ts` precisam de um Postgres real ou de um duplo de teste |
 
-**A armadilha silenciosa:** `persistPartial()` ([`index.ts:313`](src/server/index.ts)) grava a cada **250ms ou 1.000 caracteres** durante o streaming. Em SQLite local isso é gratuito. Contra um Postgres remoto, é um `UPDATE` pela rede a cada 250ms — latência somada dentro da função (que você paga por segundo) e escrita amplificada no banco.
+**A armadilha silenciosa:** `persistPartial()` ([`index.ts:313`](../src/server/index.ts)) grava a cada **250ms ou 1.000 caracteres** durante o streaming. Em SQLite local isso é gratuito. Contra um Postgres remoto, é um `UPDATE` pela rede a cada 250ms — latência somada dentro da função (que você paga por segundo) e escrita amplificada no banco.
 
 **Ajuste obrigatório:** subir o intervalo para ~2s e o limiar para ~4.000 caracteres, e garantir que o `persistPartial(true)` do `finally` continue existindo para não perder a cauda. Sem isso, uma resposta de 2 minutos gera ~480 escritas remotas.
 

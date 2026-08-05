@@ -19,7 +19,7 @@ Contexto do projeto: [PLANO.md](PLANO.md) · Regras de interface: [DESIGN.md](DE
 
 Motivo de tratar assim: se os dois aparecerem no mesmo roteiro, quem implementa liga um `<iframe>` no primeiro dia e o modelo de ameaça vira comentário. O nível 1 cobre a maior parte do valor (documento longo, código, diagrama, gráfico) sem tocar em uma linha do cabeçalho de segurança.
 
-**Benefício a declarar explicitamente:** no nível 1, o middleware de CSP em [`src/server/index.ts:110`](src/server/index.ts) **não muda**. Se um PR do nível 1 mexer em `Content-Security-Policy`, ele está errado.
+**Benefício a declarar explicitamente:** no nível 1, o middleware de CSP em [`src/server/index.ts:110`](../src/server/index.ts) **não muda**. Se um PR do nível 1 mexer em `Content-Security-Policy`, ele está errado.
 
 ---
 
@@ -27,7 +27,7 @@ Motivo de tratar assim: se os dois aparecerem no mesmo roteiro, quem implementa 
 
 ### 1.1 Por que não é tool-calling
 
-`requestBody()` em [`src/server/llm-client.ts:233`](src/server/llm-client.ts) envia apenas `model`, `messages`, `stream`, `stream_options` e `temperature`. Não há ferramentas plumbadas, e o suporte a `tools` varia entre DeepSeek, GLM, Kimi, OpenRouter e Ollama. **O protocolo é delimitado por texto**, o que funciona em qualquer endpoint OpenAI-compatível — inclusive num modelo local.
+`requestBody()` em [`src/server/llm-client.ts:233`](../src/server/llm-client.ts) envia apenas `model`, `messages`, `stream`, `stream_options` e `temperature`. Não há ferramentas plumbadas, e o suporte a `tools` varia entre DeepSeek, GLM, Kimi, OpenRouter e Ollama. **O protocolo é delimitado por texto**, o que funciona em qualquer endpoint OpenAI-compatível — inclusive num modelo local.
 
 ### 1.2 Gramática
 
@@ -62,9 +62,9 @@ Regras da gramática:
 
 ### 1.3 Onde a instrução mora
 
-Um novo módulo [`src/server/artifacts/system-prompt.ts`](src/server/artifacts/system-prompt.ts) exporta `ARTIFACT_SYSTEM_PROMPT: string` e `composeSystemPrompt(userPrompt: string | null): string`.
+Um novo módulo [`src/server/artifacts/system-prompt.ts`](../src/server/artifacts/system-prompt.ts) exporta `ARTIFACT_SYSTEM_PROMPT: string` e `composeSystemPrompt(userPrompt: string | null): string`.
 
-A composição acontece em `conversationContext()` — [`src/server/index.ts:80`](src/server/index.ts) — e o resultado entra como a **primeira** mensagem do payload.
+A composição acontece em `conversationContext()` — [`src/server/index.ts:80`](../src/server/index.ts) — e o resultado entra como a **primeira** mensagem do payload.
 
 > **Restrição dura, herdada de PLANO.md §7.3:** este system prompt é grande (~600–900 tokens) e precisa ficar no **prefixo estável** do payload. Nada variável (timestamp, id de conversa, contagem de artefatos) pode entrar nele. O DeepSeek cobra ~50× menos em cache hit; um prefixo instável joga essa economia fora em toda requisição. O estado atual dos artefatos vai na **cauda** do contexto, não aqui — ver §3.2.
 
@@ -84,13 +84,13 @@ Modelos open-weight aderem a protocolos de tag com menos confiabilidade que o Cl
 
 ### 2.1 Por que no servidor
 
-`content` é acumulado no servidor ([`src/server/index.ts:277`](src/server/index.ts)) e `persistPartial()` grava a cada 250ms. O cliente agrupa texto a cada 50ms em `streamChat`. Se o parser rodasse no cliente, o corpo do artefato chegaria como texto de chat: `Markdown.tsx` renderizaria meio artefato dentro da prosa e ele sumiria depois — exatamente o piscar que a §5.2 do PLANO.md manda evitar.
+`content` é acumulado no servidor ([`src/server/index.ts:277`](../src/server/index.ts)) e `persistPartial()` grava a cada 250ms. O cliente agrupa texto a cada 50ms em `streamChat`. Se o parser rodasse no cliente, o corpo do artefato chegaria como texto de chat: `Markdown.tsx` renderizaria meio artefato dentro da prosa e ele sumiria depois — exatamente o piscar que a §5.2 do PLANO.md manda evitar.
 
 **O corpo do artefato nunca deve ser emitido como envelope `text`.**
 
 ### 2.2 O algoritmo
 
-Novo módulo [`src/server/artifacts/parser.ts`](src/server/artifacts/parser.ts):
+Novo módulo [`src/server/artifacts/parser.ts`](../src/server/artifacts/parser.ts):
 
 ```ts
 export type ParserEvent =
@@ -144,7 +144,7 @@ Artefatos são o pior caso de custo de um chat, e custo é a tese deste app. Tr�
 
 **A decisão de maior alavancagem da feature.** Sem ela, "muda o timeout para 60s" reescreve 300 linhas — saída inteira cobrada de novo, no token mais caro da tabela.
 
-Aplicação em [`src/server/artifacts/patch.ts`](src/server/artifacts/patch.ts):
+Aplicação em [`src/server/artifacts/patch.ts`](../src/server/artifacts/patch.ts):
 
 ```ts
 export function applyEdits(source: string, edits: Array<{ find: string; replace: string }>):
@@ -290,7 +290,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artifact_versions_fts USING fts5(
 
 Mais três gatilhos `artifact_versions_ai` / `_ad` / `_au`, espelhando exatamente o padrão de `messages_ai` / `_ad` / `_au` já em `schema.sql:45-56`.
 
-> **Regressão de busca, se ignorada:** hoje o código vive em `messages.content` e é indexado por `messages_fts`. Ao mover o corpo para `artifact_versions`, ele **sai do índice**. Por isso a FTS paralela é obrigatória, e `searchConversations()` ([`src/server/db/queries.ts:456`](src/server/db/queries.ts)) precisa unir os dois índices. Sem isso, buscar por um trecho de código deixa de funcionar — piora em relação a hoje.
+> **Regressão de busca, se ignorada:** hoje o código vive em `messages.content` e é indexado por `messages_fts`. Ao mover o corpo para `artifact_versions`, ele **sai do índice**. Por isso a FTS paralela é obrigatória, e `searchConversations()` ([`src/server/db/queries.ts:456`](../src/server/db/queries.ts)) precisa unir os dois índices. Sem isso, buscar por um trecho de código deixa de funcionar — piora em relação a hoje.
 
 **Todas as versões são indexadas; o filtro é na consulta, não no gatilho.** Os gatilhos ficam idênticos aos de `messages` — inserir, apagar, atualizar — e a deduplicação sai de um `JOIN` com `artifacts` filtrando `av.version = a.current_version`:
 
@@ -323,7 +323,7 @@ A alternativa — fazer o gatilho de inserção remover do índice a versão ant
 | `src/server/index.ts` | parser no laço de streaming; `composeSystemPrompt` e bloco de estado em `conversationContext`; rotas `GET /api/conversations/:id/artifacts` e `GET /api/conversations/:id/artifacts/:slug/versions/:version` |
 | `src/shared/types.ts` | §4.1 |
 
-**No laço de `/api/chat`** ([`src/server/index.ts:276`](src/server/index.ts)), o evento `text` do provedor passa a alimentar o parser em vez de ir direto ao envelope:
+**No laço de `/api/chat`** ([`src/server/index.ts:276`](../src/server/index.ts)), o evento `text` do provedor passa a alimentar o parser em vez de ir direto ao envelope:
 
 ```ts
 for (const event of parser.push(event.text)) {
@@ -361,7 +361,7 @@ for (const event of parser.push(event.text)) {
 | `src/client/components/ChatView.tsx` | terceira coluna, ordem do `Escape` |
 | `src/client/styles.css` | classes do cartão e do painel, com os tokens existentes |
 
-> `handleEvent` ([`src/client/api.ts:488`](src/client/api.ts)) trata `text`/`reasoning`/`usage`/`error`/`done` e **ignora qualquer outro tipo sem erro nem log**. Enquanto os ramos novos não existirem, o artefato simplesmente não aparece e nada acusa — perda de tempo garantida em depuração. Implemente cliente e servidor na mesma fase.
+> `handleEvent` ([`src/client/api.ts:488`](../src/client/api.ts)) trata `text`/`reasoning`/`usage`/`error`/`done` e **ignora qualquer outro tipo sem erro nem log**. Enquanto os ramos novos não existirem, o artefato simplesmente não aparece e nada acusa — perda de tempo garantida em depuração. Implemente cliente e servidor na mesma fase.
 
 ---
 

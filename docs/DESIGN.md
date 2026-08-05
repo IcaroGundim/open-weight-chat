@@ -2,7 +2,7 @@
 
 Documento normativo do frontend do Open Weight Chat. É a fonte de verdade da estética: cores, tipografia, espaçamento, componentes, voz e movimento. **Se um componente novo contradiz este arquivo, o componente está errado.**
 
-Implementação: [`src/client/styles.css`](src/client/styles.css) · Verificação: `node scripts/contrast.mjs` e `node scripts/audit-design.mjs`
+Implementação: [`src/client/styles.css`](../src/client/styles.css) · Verificação: `node scripts/contrast.mjs` e `node scripts/audit-design.mjs`
 
 ---
 
