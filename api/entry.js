@@ -3537,10 +3537,21 @@ function getApp() {
 var maxDuration = 300;
 function handler(request, response) {
   try {
+    restoreRewrittenApiPath(request);
     return handle(getApp())(request, response).catch((error) => writeStartupError(response, error));
   } catch (error) {
     return writeStartupError(response, error);
   }
+}
+function restoreRewrittenApiPath(request) {
+  if (!request.url) return;
+  const url = new URL(request.url, "http://vercel.internal");
+  if (url.pathname !== "/api/entry" || !url.searchParams.has("__route")) return;
+  const route = url.searchParams.get("__route") ?? "";
+  url.searchParams.delete("__route");
+  const segments = route.split("/").filter((segment) => segment && segment !== "." && segment !== "..").map((segment) => encodeURIComponent(segment));
+  const query = url.searchParams.toString();
+  request.url = `/api/${segments.join("/")}${query ? `?${query}` : ""}`;
 }
 function writeStartupError(response, error) {
   if (response.writableEnded) return Promise.resolve();
@@ -3554,5 +3565,6 @@ function writeStartupError(response, error) {
 }
 export {
   handler as default,
-  maxDuration
+  maxDuration,
+  restoreRewrittenApiPath
 };

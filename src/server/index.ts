@@ -999,7 +999,7 @@ let cachedApp: Hono<{ Variables: AppVariables }> | null = null;
  * `createApp` abre o banco. Fazer isso no corpo do módulo derrubava a função da
  * Vercel já na importação, e a plataforma respondia FUNCTION_INVOCATION_FAILED
  * — um 500 opaco, sem chance de explicar a causa. Adiada, a falha vira uma
- * resposta JSON legível (ver api/[...route].ts).
+ * resposta JSON legível (ver src/server/vercel-handler.ts).
  */
 export function getApp(): Hono<{ Variables: AppVariables }> {
   cachedApp ??= createApp();

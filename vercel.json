@@ -4,11 +4,19 @@
   "buildCommand": "pnpm build:client && pnpm build:api",
   "outputDirectory": "dist",
   "functions": {
-    "api/**/*.js": {
+    "api/entry.js": {
       "maxDuration": 300
     }
   },
   "rewrites": [
+    {
+      "source": "/api",
+      "destination": "/api/entry?__route="
+    },
+    {
+      "source": "/api/:route*",
+      "destination": "/api/entry?__route=:route*"
+    },
     {
       "source": "/((?!api/).*)",
       "destination": "/index.html"

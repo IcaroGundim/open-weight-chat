@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import handler from './vercel-handler';
+import handler, { restoreRewrittenApiPath } from './vercel-handler';
 import { createApp } from './index';
 
 const serverDir = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +42,14 @@ describe('entrada da função na Vercel', () => {
     expect(written.status).toBe(500);
     expect(written.type).toContain('application/json');
     expect(written.body).toContain('DATABASE_URL');
+  });
+
+  it('restaura o caminho /api/* após o rewrite para a Function estática', () => {
+    const request = { url: '/api/entry?__route=providers/openrouter&source=settings' };
+
+    restoreRewrittenApiPath(request);
+
+    expect(request.url).toBe('/api/providers/openrouter?source=settings');
   });
 
   it('não arrasta node:sqlite para o grafo de módulos da função', () => {
