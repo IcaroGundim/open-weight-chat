@@ -8,6 +8,7 @@ import {
   createSqliteRunner,
   loadMigrations,
   migrateUp,
+  splitStatements,
   tableCounts,
   toPostgresPlaceholders,
   type MigrationContext,
@@ -81,6 +82,19 @@ afterEach(() => {
 });
 
 describe('motor de migração', () => {
+  it('nao divide SQL em ponto-e-virgula dentro de comentarios ou literais', () => {
+    const statements = splitStatements(
+      "-- A descricao termina; mas o comentario continua\n" +
+      "CREATE TABLE first_table (value text DEFAULT ';');\n" +
+      '/* Outro comentario; ainda nao e um statement. */\n' +
+      'CREATE TABLE second_table (id integer);',
+    );
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain('CREATE TABLE first_table');
+    expect(statements[1]).toContain('CREATE TABLE second_table');
+  });
+
   it('adapta placeholders neutros para Postgres sem alterar literais', () => {
     expect(toPostgresPlaceholders("SELECT '?' AS literal, name FROM users WHERE id = ? AND note = 'it''s ?'"))
       .toBe("SELECT '?' AS literal, name FROM users WHERE id = $1 AND note = 'it''s ?'");

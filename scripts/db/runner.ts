@@ -79,15 +79,69 @@ export function createSqliteRunner(db: DatabaseSync): SqlRunner {
   };
 }
 
-/** Divide SQL por `;` respeitando aspas simples — para statements isolados. */
-function splitStatements(sql: string): string[] {
+/** Divide SQL por `;`, respeitando strings e comentários SQL. */
+export function splitStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = '';
-  let inString = false;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let lineComment = false;
+  let blockComment = false;
+
   for (let index = 0; index < sql.length; index += 1) {
     const char = sql[index];
-    if (char === "'" && sql[index - 1] !== '\\') inString = !inString;
-    if (char === ';' && !inString) {
+    const next = sql[index + 1];
+
+    if (lineComment) {
+      current += char;
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      current += char;
+      if (char === '*' && next === '/') {
+        current += next;
+        index += 1;
+        blockComment = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      current += char;
+      if (char === "'" && next === "'") {
+        current += next;
+        index += 1;
+      } else if (char === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (doubleQuoted) {
+      current += char;
+      if (char === '"' && next === '"') {
+        current += next;
+        index += 1;
+      } else if (char === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+
+    if (char === '-' && next === '-') {
+      current += '--';
+      index += 1;
+      lineComment = true;
+    } else if (char === '/' && next === '*') {
+      current += '/*';
+      index += 1;
+      blockComment = true;
+    } else if (char === "'") {
+      current += char;
+      singleQuoted = true;
+    } else if (char === '"') {
+      current += char;
+      doubleQuoted = true;
+    } else if (char === ';') {
       statements.push(current);
       current = '';
     } else {
