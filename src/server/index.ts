@@ -1,7 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { serve } from '@hono/node-server';
+import { join } from 'node:path';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
@@ -11,6 +9,8 @@ import {
   ProviderIdSchema,
   ProviderSettingsInputSchema,
   UpdateConversationSchema,
+  type Artifact,
+  type Message,
   type ProviderSettings,
   type SseEnvelope,
   type ProviderId,
@@ -24,7 +24,8 @@ import { calculateUsageAndCost } from './cost';
 import { estimateContextTokens, estimateTokens, trimContext, type ContextMessage } from './context';
 import { AppError, errorPayload, normalizeError } from './errors';
 import { streamOpenAICompatible } from './llm-client';
-import { ChatDatabase } from './db/queries';
+// Somente tipo: um import de valor traria `node:sqlite` para o grafo de
+// módulos da função serverless, que não usa SQLite. Ver src/server/main.ts.
 import type { ProviderSettingsRecord } from './db/queries';
 import type { ChatDatabaseAdapter } from './db/database';
 import { NeonChatDatabase } from './db/neon';
@@ -96,7 +97,7 @@ function assertModelSelection(providerId: string, modelId: string): { providerId
 
 function conversationContext(
   systemPrompt: string | null,
-  messages: ReturnType<ChatDatabase['getMessages']>,
+  messages: readonly Message[],
 ): ContextMessage[] {
   const context: ContextMessage[] = [{ role: 'system', content: composeSystemPrompt(systemPrompt) }];
   for (const message of messages) {
@@ -110,8 +111,8 @@ function conversationContext(
 
 function requestContext(
   systemPrompt: string | null,
-  messages: ReturnType<ChatDatabase['getMessages']>,
-  artifacts: ReturnType<ChatDatabase['getArtifacts']>,
+  messages: readonly Message[],
+  artifacts: readonly Artifact[],
   contextWindow: number,
 ): { messages: ContextMessage[]; truncated: boolean } {
   const full = conversationContext(systemPrompt, messages);
@@ -196,18 +197,16 @@ function toProviderSettings(record: ProviderSettingsRecord): ProviderSettings {
 }
 
 export function createApp(options: AppOptions = {}): Hono {
-  // Em serverless o disco é somente leitura fora de /tmp, e /tmp não persiste
-  // entre invocações: cair no SQLite ali significaria perder tudo a cada cold
-  // start. Falhar com mensagem acionável é melhor que fingir que funciona.
-  if (!options.db && !process.env.DATABASE_URL && process.env.VERCEL) {
+  // Sem banco injetado, o único fallback daqui é o Neon. O SQLite é escolhido
+  // por src/server/main.ts, que é a entrada local — assim `node:sqlite` nunca
+  // entra no grafo de módulos da função serverless.
+  if (!options.db && !process.env.DATABASE_URL) {
     throw new AppError('UNKNOWN', {
       status: 500,
-      message: 'Configure DATABASE_URL (Neon) nas variáveis de ambiente da Vercel. O disco da função é somente leitura, então o SQLite local não funciona no deploy.',
+      message: 'Configure DATABASE_URL (Neon) nas variáveis de ambiente. O disco da função é somente leitura e não persiste entre invocações, então o SQLite não funciona no deploy.',
     });
   }
-  const db = options.db ?? (process.env.DATABASE_URL
-    ? new NeonChatDatabase(process.env.DATABASE_URL)
-    : new ChatDatabase());
+  const db = options.db ?? new NeonChatDatabase(process.env.DATABASE_URL as string);
   const databaseMode = process.env.DATABASE_URL ? 'neon' : 'sqlite';
   const refreshRuntimePerRequest = !options.db && Boolean(process.env.DATABASE_URL);
   const app = new Hono();
@@ -846,35 +845,12 @@ let cachedApp: Hono | null = null;
 /**
  * Criação preguiçosa e memoizada.
  *
- * `createApp` abre o banco. Fazer isso no corpo do módulo derrubava a função
- * da Vercel já na importação: sem `DATABASE_URL`, o fallback para SQLite tenta
- * escrever num disco somente leitura e a plataforma respondia
- * FUNCTION_INVOCATION_FAILED — um 500 opaco, sem chance de explicar a causa.
- * Adiada, a falha vira uma resposta JSON legível (ver api/[...route].ts).
+ * `createApp` abre o banco. Fazer isso no corpo do módulo derrubava a função da
+ * Vercel já na importação, e a plataforma respondia FUNCTION_INVOCATION_FAILED
+ * — um 500 opaco, sem chance de explicar a causa. Adiada, a falha vira uma
+ * resposta JSON legível (ver api/[...route].ts).
  */
 export function getApp(): Hono {
   cachedApp ??= createApp();
   return cachedApp;
-}
-
-export function startServer(): ReturnType<typeof serve> {
-  const port = Number(process.env.PORT ?? 8787);
-  const hostname = process.env.HOST ?? '0.0.0.0';
-  return serve({ fetch: getApp().fetch, port, hostname });
-}
-
-const modulePath = fileURLToPath(import.meta.url);
-const entrypoint = process.argv
-  .slice(1)
-  .filter((argument) => !argument.startsWith('-'))
-  .some((argument) => {
-    try {
-      return resolve(argument) === modulePath;
-    } catch {
-      return false;
-    }
-  });
-if (entrypoint) {
-  startServer();
-  console.log(`Backend ouvindo em http://${process.env.HOST ?? 'localhost'}:${process.env.PORT ?? 8787}`);
 }

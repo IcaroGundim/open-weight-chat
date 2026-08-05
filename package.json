@@ -9,9 +9,9 @@
     "pnpm": ">=11"
   },
   "scripts": {
-    "dev": "concurrently -k \"vite --host 0.0.0.0\" \"tsx watch src/server/index.ts\"",
+    "dev": "concurrently -k \"vite --host 0.0.0.0\" \"tsx watch src/server/main.ts\"",
     "build:client": "vite build",
-    "build": "vite build && esbuild src/server/index.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/server.js --external:node:*",
+    "build": "vite build && esbuild src/server/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/server.js --external:node:*",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "design": "node scripts/contrast.mjs && node scripts/audit-design.mjs",
