@@ -196,6 +196,15 @@ function toProviderSettings(record: ProviderSettingsRecord): ProviderSettings {
 }
 
 export function createApp(options: AppOptions = {}): Hono {
+  // Em serverless o disco é somente leitura fora de /tmp, e /tmp não persiste
+  // entre invocações: cair no SQLite ali significaria perder tudo a cada cold
+  // start. Falhar com mensagem acionável é melhor que fingir que funciona.
+  if (!options.db && !process.env.DATABASE_URL && process.env.VERCEL) {
+    throw new AppError('UNKNOWN', {
+      status: 500,
+      message: 'Configure DATABASE_URL (Neon) nas variáveis de ambiente da Vercel. O disco da função é somente leitura, então o SQLite local não funciona no deploy.',
+    });
+  }
   const db = options.db ?? (process.env.DATABASE_URL
     ? new NeonChatDatabase(process.env.DATABASE_URL)
     : new ChatDatabase());
@@ -832,12 +841,26 @@ export function createApp(options: AppOptions = {}): Hono {
   return app;
 }
 
-export const app = createApp();
+let cachedApp: Hono | null = null;
+
+/**
+ * Criação preguiçosa e memoizada.
+ *
+ * `createApp` abre o banco. Fazer isso no corpo do módulo derrubava a função
+ * da Vercel já na importação: sem `DATABASE_URL`, o fallback para SQLite tenta
+ * escrever num disco somente leitura e a plataforma respondia
+ * FUNCTION_INVOCATION_FAILED — um 500 opaco, sem chance de explicar a causa.
+ * Adiada, a falha vira uma resposta JSON legível (ver api/[...route].ts).
+ */
+export function getApp(): Hono {
+  cachedApp ??= createApp();
+  return cachedApp;
+}
 
 export function startServer(): ReturnType<typeof serve> {
   const port = Number(process.env.PORT ?? 8787);
   const hostname = process.env.HOST ?? '0.0.0.0';
-  return serve({ fetch: app.fetch, port, hostname });
+  return serve({ fetch: getApp().fetch, port, hostname });
 }
 
 const modulePath = fileURLToPath(import.meta.url);
