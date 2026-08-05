@@ -1,12 +1,5 @@
 import { AppError, UpstreamHttpError, isAbortError, normalizeError } from './errors';
-import {
-  getModel,
-  getProvider,
-  getProviderApiKey,
-  getProviderBaseURL,
-  type ProviderConfig,
-  type ProviderModelConfig,
-} from './providers.config';
+import { safeFetchWithRedirects } from './ssrf';
 import type { ProviderId } from '../shared/types';
 import type { ProviderUsageLike } from './cost';
 
@@ -24,6 +17,16 @@ export type LlmStreamEvent =
 export interface LlmStreamOptions {
   providerId: ProviderId;
   modelId: string;
+  /**
+   * URL base do provedor EFETIVO do usuário, resolvida dentro da requisição
+   * via `resolveProvider(userId, providerId, db)` (provider-resolution.ts).
+   * Nunca resolva provedor/chave aqui dentro — o chamador é o dono do contexto.
+   */
+  baseURL: string;
+  /** Chave decifrada do usuário dono da requisição, ou null. */
+  apiKey: string | null;
+  /** O provedor exige chave? (vem de resolveProvider). */
+  requiresApiKey: boolean;
   messages: readonly LlmMessage[];
   signal: AbortSignal;
   temperature?: number;
@@ -245,14 +248,15 @@ export class OpenAICompatibleClient {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
   async *stream(options: LlmStreamOptions): AsyncGenerator<LlmStreamEvent> {
-    const provider = getProvider(options.providerId);
-    const model = getModel(options.providerId, options.modelId);
-    if (!provider || !model) {
+    // O provedor/chave/baseURL já vêm resolvidos pelo chamador (resolveProvider);
+    // este módulo só valida e usa. Sem chave num provedor que exige, o erro é
+    // claro e aponta para a tela de configuração do usuário.
+    if (!options.baseURL) {
       throw new AppError('MODEL_NOT_FOUND', { message: 'O provedor ou modelo selecionado não está configurado.' });
     }
-    if (provider.requiresApiKey && !getProviderApiKey(provider)) {
+    if (options.requiresApiKey && !options.apiKey) {
       throw new AppError('INVALID_API_KEY', {
-        message: `Configure ${provider.apiKeyEnv ?? 'a chave do provedor'} no ambiente do servidor.`,
+        message: 'Configure a chave deste provedor em Configurações → Provedores.',
       });
     }
 
@@ -274,18 +278,25 @@ export class OpenAICompatibleClient {
       let response: Response;
       try {
         const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'text/event-stream' };
-        const apiKey = getProviderApiKey(provider);
-        if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+        if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
         if (options.providerId === 'openrouter') {
           if (process.env.OPENROUTER_HTTP_REFERER) headers['HTTP-Referer'] = process.env.OPENROUTER_HTTP_REFERER;
           if (process.env.OPENROUTER_APP_TITLE) headers['X-Title'] = process.env.OPENROUTER_APP_TITLE;
         }
-        response = await fetchImpl(`${getProviderBaseURL(provider).replace(/\/+$/u, '')}/chat/completions`, {
-          method: 'POST',
-          headers,
-          body: requestBody(options),
-          signal: combined.signal,
-        });
+        // O endpoint vem da configuraÃ§Ã£o BYOK do usuÃ¡rio. Mesmo tendo sido
+        // validado ao salvar, ele pode ter sido gravado antes da proteÃ§Ã£o ou
+        // ter mudado via DNS; portanto toda tentativa de chat revalida URL,
+        // DNS e redirecionamentos antes de abrir a conexÃ£o com o upstream.
+        response = await safeFetchWithRedirects(
+          `${options.baseURL.replace(/\/+$/u, '')}/chat/completions`,
+          {
+            method: 'POST',
+            headers,
+            body: requestBody(options),
+            signal: combined.signal,
+          },
+          { fetchImpl },
+        );
       } catch (error) {
         if (connectionTimedOut) throw new AppError('UPSTREAM_TIMEOUT');
         if (options.signal.aborted) throw options.signal.reason ?? error;
@@ -342,11 +353,3 @@ export class OpenAICompatibleClient {
 export async function* streamOpenAICompatible(options: LlmStreamOptions): AsyncGenerator<LlmStreamEvent> {
   yield* new OpenAICompatibleClient(options.fetchImpl).stream(options);
 }
-
-export function providerModel(providerId: ProviderId, modelId: string): ProviderModelConfig {
-  const model = getModel(providerId, modelId);
-  if (!model) throw new AppError('MODEL_NOT_FOUND');
-  return model;
-}
-
-export type { ProviderConfig };

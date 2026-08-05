@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono, type Context } from 'hono';
+import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import {
   ChatRequestSchema,
@@ -29,19 +30,18 @@ import { streamOpenAICompatible } from './llm-client';
 import type { ProviderSettingsRecord } from './db/queries';
 import type { ChatDatabaseAdapter } from './db/database';
 import { NeonChatDatabase } from './db/neon';
+import { createAuthMiddleware, type AppVariables } from './auth';
 import {
-  getDefaultModelSelection,
-  getModel,
-  getModelsCatalog,
-  getProvider,
-  getProviderApiKey,
-  getProviderBaseURL,
-  setRuntimeProviders,
-  type ProviderModelConfig,
-  type RuntimeProvider,
-} from './providers.config';
-import { decryptSecret, encryptSecret, getSecretStorageStatus } from './secrets';
+  resolveDefaultModelSelection,
+  resolveModelsCatalog,
+  resolveProvider,
+  type ResolvedProvider,
+} from './provider-resolution';
+import type { ProviderModelConfig } from './providers.config';
+import { encryptSecret, getSecretStorageStatus } from './secrets';
 import { discoverProviderModels } from './providers.discovery';
+import { assertSafeProviderUrl } from './ssrf';
+import { pickDefaultRateLimitStore, type RateLimitStore } from './rate-limit';
 
 // Node 24 can load the local .env without adding a dotenv dependency. Existing
 // process variables still remain the source of truth in deployed environments.
@@ -55,6 +55,13 @@ export interface AppOptions {
   db?: ChatDatabaseAdapter;
   fetchImpl?: typeof fetch;
   staticRoot?: string;
+  /**
+   * Middleware de autenticação injetável. Os testes passam um verifier fake;
+   * sem ele, o createApp usa o Clerk real (createAuthMiddleware()).
+   */
+  auth?: ReturnType<typeof createAuthMiddleware>;
+  /** Store de limites de uso injetável (testes). Sem ele, é escolhido do banco. */
+  rateLimit?: RateLimitStore;
 }
 
 function validationMessage(error: { issues: Array<{ path: PropertyKey[]; message: string }> }): string {
@@ -64,7 +71,7 @@ function validationMessage(error: { issues: Array<{ path: PropertyKey[]; message
     .join('; ');
 }
 
-async function parseJson<T>(c: Context, schema: { safeParse: (value: unknown) => { success: true; data: T } | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string }> } } }): Promise<T> {
+async function parseJson<T>(c: Context<{ Variables: AppVariables }>, schema: { safeParse: (value: unknown) => { success: true; data: T } | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string }> } } }): Promise<T> {
   let body: unknown;
   try {
     body = await c.req.json();
@@ -78,21 +85,37 @@ async function parseJson<T>(c: Context, schema: { safeParse: (value: unknown) =>
   return parsed.data;
 }
 
-function jsonError(c: Context, error: unknown): Response {
+function jsonError(c: Context<{ Variables: AppVariables }>, error: unknown): Response {
   const normalized = normalizeError(error);
   return c.json({ error: errorPayload(normalized) }, normalized.status as 400);
 }
 
-function assertModelSelection(providerId: string, modelId: string): { providerId: ProviderId; model: ProviderModelConfig } {
-  const provider = getProvider(providerId);
-  const model = getModel(providerId, modelId);
-  if (!provider || !model) {
-    throw new AppError('MODEL_NOT_FOUND', {
-      status: 404,
-      message: 'O provedor ou modelo selecionado não está configurado no servidor.',
-    });
-  }
-  return { providerId: provider.id, model };
+function modelNotFound(): AppError {
+  return new AppError('MODEL_NOT_FOUND', {
+    status: 404,
+    message: 'O provedor ou modelo selecionado não está configurado no servidor.',
+  });
+}
+
+/**
+ * Valida a seleção provedor/modelo DENTRO DA REQUISIÇÃO, com os dados do
+ * usuário autenticado (provider-resolution.ts). Não existe mais catálogo
+ * global mutável — cada chamada resolve o provedor efetivo do dono.
+ */
+async function assertUserModelSelection(
+  userId: string,
+  providerId: string,
+  modelId: string,
+  db: ChatDatabaseAdapter,
+): Promise<{ provider: ResolvedProvider; model: ProviderModelConfig }> {
+  const provider = await resolveProvider(userId, providerId, db);
+  const model = provider?.models.find((item) => item.id === modelId);
+  if (!provider || !model) throw modelNotFound();
+  // Rejeita tambÃ©m registros legados que tenham sido criados antes da
+  // validaÃ§Ã£o de URL. A checagem completa (DNS e redirecionamentos) acontece
+  // novamente no fetch do stream, antes de qualquer conexÃ£o com o upstream.
+  assertSafeProviderUrl(provider.baseURL);
+  return { provider, model };
 }
 
 function conversationContext(
@@ -138,48 +161,8 @@ function writeEnvelope(stream: Parameters<typeof streamSSE>[1] extends (stream: 
   return stream.writeSSE({ event: envelope.type, data: JSON.stringify(envelope) });
 }
 
-function routeErrorHandler(error: unknown, c: Context): Response {
+function routeErrorHandler(error: unknown, c: Context<{ Variables: AppVariables }>): Response {
   return jsonError(c, error);
-}
-
-/**
- * Recarrega no catálogo os provedores cadastrados pela interface, decifrando as
- * chaves apenas para a memória do processo. Registro inválido é ignorado em vez
- * de derrubar o catálogo inteiro.
- */
-async function refreshRuntimeProviders(db: ChatDatabaseAdapter): Promise<void> {
-  const runtime: RuntimeProvider[] = [];
-  for (const record of await db.listProviderSettings()) {
-    const parsed = ProviderSettingsInputSchema.safeParse({
-      label: record.label,
-      baseURL: record.baseURL,
-      verifiedAt: record.verifiedAt,
-      models: record.models,
-    });
-    if (!parsed.success) continue;
-    runtime.push({
-      config: {
-        id: record.id,
-        label: parsed.data.label,
-        baseURL: parsed.data.baseURL,
-        requiresApiKey: true,
-        verifiedAt: record.verifiedAt ?? '',
-        models: parsed.data.models.map((model) => ({
-          id: model.id,
-          label: model.label ?? model.id,
-          ctx: model.ctx,
-          reasoning: model.reasoning ?? false,
-          pricing: {
-            inputPerMillion: model.pricing?.inputPerMillion ?? null,
-            cachedInputPerMillion: model.pricing?.cachedInputPerMillion ?? null,
-            outputPerMillion: model.pricing?.outputPerMillion ?? null,
-          },
-        })),
-      },
-      apiKey: decryptSecret(record.apiKeyCipher),
-    });
-  }
-  setRuntimeProviders(runtime);
 }
 
 function toProviderSettings(record: ProviderSettingsRecord): ProviderSettings {
@@ -196,7 +179,88 @@ function toProviderSettings(record: ProviderSettingsRecord): ProviderSettings {
   };
 }
 
-export function createApp(options: AppOptions = {}): Hono {
+/**
+ * Origem do Clerk para a CSP. O Clerk 2025+ serve o frontend de login em
+ * https://<instância>.clerk.accounts.dev; CLERK_FRONTEND_API_ORIGIN permite
+ * customizar (self-hosting ou domínio próprio). Wildcard de host é aceito em
+ * script-src/connect-src/frame-src pela especificação CSP.
+ */
+function clerkOrigin(): string {
+  return process.env.CLERK_FRONTEND_API_ORIGIN ?? 'https://*.clerk.accounts.dev';
+}
+
+function contentSecurityPolicy(): string {
+  const clerk = clerkOrigin();
+  return [
+    "default-src 'self'",
+    `script-src 'self' ${clerk}`,
+    `connect-src 'self' ${clerk}`,
+    "img-src 'self' data:",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    `frame-src ${clerk}`,
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
+
+function isProductionDeployment(): boolean {
+  return process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+}
+
+/**
+ * Normaliza a única origem de navegador autorizada a chamar a API de outro
+ * origin. Em produção ela é obrigatória: o frontend e a API normalmente ficam
+ * na mesma origem na Vercel, mas a configuração explícita evita abrir CORS por
+ * acidente quando forem separados no futuro.
+ */
+export function resolveAppOrigin(
+  rawOrigin = process.env.APP_ORIGIN,
+  production = isProductionDeployment(),
+): string | undefined {
+  const value = rawOrigin?.trim();
+  if (!value) {
+    if (!production) return undefined;
+    throw new AppError('UNKNOWN', {
+      status: 500,
+      message: 'Configure APP_ORIGIN com a origem HTTPS pública do aplicativo em produção.',
+    });
+  }
+
+  let origin: URL;
+  try {
+    origin = new URL(value);
+  } catch {
+    throw new AppError('UNKNOWN', {
+      status: 500,
+      message: 'APP_ORIGIN precisa ser uma URL absoluta válida.',
+    });
+  }
+
+  if (origin.protocol !== 'http:' && origin.protocol !== 'https:') {
+    throw new AppError('UNKNOWN', {
+      status: 500,
+      message: 'APP_ORIGIN precisa usar http ou https.',
+    });
+  }
+  if (production && origin.protocol !== 'https:') {
+    throw new AppError('UNKNOWN', {
+      status: 500,
+      message: 'APP_ORIGIN precisa usar HTTPS em produção.',
+    });
+  }
+  if (origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
+    throw new AppError('UNKNOWN', {
+      status: 500,
+      message: 'APP_ORIGIN deve conter somente a origem (esquema, host e porta opcional), sem caminho, credenciais, query ou fragmento.',
+    });
+  }
+
+  return origin.origin;
+}
+
+export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariables }> {
   // Sem banco injetado, o único fallback daqui é o Neon. O SQLite é escolhido
   // por src/server/main.ts, que é a entrada local — assim `node:sqlite` nunca
   // entra no grafo de módulos da função serverless.
@@ -207,59 +271,90 @@ export function createApp(options: AppOptions = {}): Hono {
     });
   }
   const db = options.db ?? new NeonChatDatabase(process.env.DATABASE_URL as string);
-  const databaseMode = process.env.DATABASE_URL ? 'neon' : 'sqlite';
-  const refreshRuntimePerRequest = !options.db && Boolean(process.env.DATABASE_URL);
-  const app = new Hono();
-  let runtimeReady = refreshRuntimeProviders(db);
+  const rateLimit = options.rateLimit ?? pickDefaultRateLimitStore(db);
+  const appOrigin = resolveAppOrigin();
+  // Testes injetam um verifier fake; produção usa o Clerk real.
+  const authMiddleware = options.auth ?? createAuthMiddleware();
+  const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', async (c, next) => {
-    // Instâncias quentes da Vercel não compartilham memória. Releia os
-    // provedores do Neon para que uma chave salva em outra instância seja vista.
-    if (refreshRuntimePerRequest) await refreshRuntimeProviders(db);
-    else await runtimeReady;
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
-    c.header(
-      'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-    );
+    c.header('Content-Security-Policy', contentSecurityPolicy());
     await next();
   });
 
-  app.get('/api/models', (c) => c.json(getModelsCatalog()));
+  // A API usa bearer token, não cookies: somente APP_ORIGIN pode obter uma
+  // resposta para chamadas cross-origin. Sem APP_ORIGIN no desenvolvimento,
+  // não emitimos CORS; o proxy do Vite mantém frontend e API na mesma origem.
+  if (appOrigin) {
+    app.use('/api/*', cors({
+      origin: appOrigin,
+      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowHeaders: ['Authorization', 'Content-Type'],
+      maxAge: 86_400,
+    }));
+  }
 
-  app.get('/api/health', (c) => c.json({
-    ok: true as const,
-    database: databaseMode,
-    secretStorage: getSecretStorageStatus(),
-  }));
+  // /api/health é a ÚNICA rota pública: registrada ANTES do middleware de
+  // autenticação, que protege todo o restante de /api/*.
+  app.get('/api/health', (c) => {
+    c.header('Cache-Control', 'no-store');
+    return c.json({ ok: true as const });
+  });
 
-  app.get('/api/providers', async (c) => c.json({
-    providers: (await db.listProviderSettings()).map(toProviderSettings),
-    secretStorage: getSecretStorageStatus(),
-  }));
+  // Toda rota /api/* a partir daqui exige autenticação. O middleware devolve
+  // 401 ANTES de qualquer acesso ao banco (ver src/server/auth.ts).
+  app.use('/api/*', authMiddleware);
+
+  // Primeiro acesso autenticado: garante o registro do usuário (uma vez por
+  // requisição, upsert idempotente). Nunca roda para /api/health.
+  app.use('/api/*', async (c, next) => {
+    await db.ensureUser(c.get('userId'));
+    await next();
+  });
+
+  app.get('/api/models', async (c) => {
+    const userId = c.get('userId');
+    return c.json(await resolveModelsCatalog(userId, db));
+  });
+
+  app.get('/api/providers', async (c) => {
+    const userId = c.get('userId');
+    return c.json({
+      providers: (await db.listProviderSettings(userId)).map(toProviderSettings),
+      secretStorage: getSecretStorageStatus(),
+    });
+  });
 
   app.put('/api/providers/:id', async (c) => {
     try {
+      const userId = c.get('userId');
       const id = c.req.param('id');
       const idCheck = ProviderIdSchema.safeParse(id);
       if (!idCheck.success) {
         throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
       }
       const body = await parseJson(c, ProviderSettingsInputSchema);
+      // SSRF: URL base precisa ser segura (HTTPS em produção; http://localhost
+      // permitido em dev/teste — opções padrão do ssrf.ts por ambiente).
+      assertSafeProviderUrl(body.baseURL);
 
       let apiKeyCipher: string | null | undefined;
       if (body.apiKey === null) {
+        // null apaga a chave.
         apiKeyCipher = null;
       } else if (typeof body.apiKey === 'string' && body.apiKey.trim()) {
         const status = getSecretStorageStatus();
         if (!status.available) {
           throw new AppError('UNKNOWN', { status: 400, message: status.reason ?? 'Não é possível guardar chaves.' });
         }
-        apiKeyCipher = encryptSecret(body.apiKey.trim());
+        // v2: a chave é amarrada ao dono via AAD userId:providerId.
+        apiKeyCipher = encryptSecret(body.apiKey.trim(), { userId, providerId: id });
       }
+      // apiKeyCipher undefined → mantém a chave atual do usuário.
 
-      const record = await db.upsertProviderSettings({
+      const record = await db.upsertProviderSettings(userId, {
         id,
         label: body.label,
         baseURL: body.baseURL,
@@ -267,8 +362,6 @@ export function createApp(options: AppOptions = {}): Hono {
         verifiedAt: body.verifiedAt ?? null,
         apiKeyCipher,
       });
-      runtimeReady = refreshRuntimeProviders(db);
-      await runtimeReady;
       return c.json({ provider: toProviderSettings(record) });
     } catch (error) {
       return routeErrorHandler(error, c);
@@ -277,33 +370,33 @@ export function createApp(options: AppOptions = {}): Hono {
 
   app.post('/api/providers/:id/discover-models', async (c) => {
     try {
+      const userId = c.get('userId');
       const id = c.req.param('id');
       const idCheck = ProviderIdSchema.safeParse(id);
       if (!idCheck.success) {
         throw new AppError('UNKNOWN', { status: 400, message: validationMessage(idCheck.error) });
       }
-      const record = (await db.listProviderSettings()).find((item) => item.id === id);
-      if (!record) {
+      await rateLimit.checkModelDiscovery(userId);
+      // Resolve com os dados DO USUÁRIO (nunca de outro) e exige registro
+      // próprio: sem registro, 404 — sem revelar que o id existe.
+      const resolved = await resolveProvider(userId, id, db);
+      const record = resolved ? (await db.listProviderSettings(userId)).find((item) => item.id === id) : undefined;
+      if (!resolved || !record) {
         throw new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' });
       }
-      const provider = getProvider(id);
-      if (!provider) {
-        throw new AppError('UNKNOWN', { status: 400, message: 'O provedor ainda não está disponível no catálogo.' });
-      }
       const models = await discoverProviderModels(
-        getProviderBaseURL(provider),
-        getProviderApiKey(provider),
+        resolved.baseURL,
+        resolved.apiKey ?? undefined,
         options.fetchImpl ?? fetch,
       );
-      const updated = await db.upsertProviderSettings({
+      const updated = await db.upsertProviderSettings(userId, {
         id,
         label: record.label,
         baseURL: record.baseURL,
         models,
         verifiedAt: new Date().toISOString().slice(0, 10),
+        // apiKeyCipher indefinido preserva a chave atual do usuário.
       });
-      runtimeReady = refreshRuntimeProviders(db);
-      await runtimeReady;
       return c.json({ provider: toProviderSettings(updated), discovered: models.length });
     } catch (error) {
       return routeErrorHandler(error, c);
@@ -311,44 +404,58 @@ export function createApp(options: AppOptions = {}): Hono {
   });
 
   app.delete('/api/providers/:id', async (c) => {
-    const deleted = await db.deleteProviderSettings(c.req.param('id'));
+    const userId = c.get('userId');
+    const deleted = await db.deleteProviderSettings(userId, c.req.param('id'));
     if (!deleted) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Provedor não encontrado.' }));
-    runtimeReady = refreshRuntimeProviders(db);
-    await runtimeReady;
     return c.json({ ok: true as const });
   });
 
   app.get('/api/analytics/costs', async (c) => {
+    const userId = c.get('userId');
     const rawDays = Number(c.req.query('days') ?? 30);
     const days = Number.isFinite(rawDays) ? Math.min(365, Math.max(1, Math.trunc(rawDays))) : 30;
-    return c.json(await db.getCostAnalytics(days));
+    return c.json(await db.getCostAnalytics(userId, days));
   });
 
   app.get('/api/conversations/search', async (c) => {
+    const userId = c.get('userId');
     const query = c.req.query('q')?.trim() ?? '';
     if (!query) return c.json({ results: [] });
     if (query.length > 200) return jsonError(c, new AppError('UNKNOWN', { status: 400, message: 'A busca pode ter no máximo 200 caracteres.' }));
     try {
-      return c.json({ results: await db.searchConversations(query) });
+      return c.json({ results: await db.searchConversations(userId, query) });
     } catch {
       return jsonError(c, new AppError('UNKNOWN', { status: 400, message: 'A expressão de busca não é válida.' }));
     }
   });
 
   app.get('/api/conversations', async (c) => {
+    const userId = c.get('userId');
     const includeArchived = c.req.query('includeArchived') === 'true';
-    return c.json({ conversations: await db.listConversations({ includeArchived }) });
+    return c.json({ conversations: await db.listConversations(userId, { includeArchived }) });
   });
 
   app.post('/api/conversations', async (c) => {
     try {
+      const userId = c.get('userId');
       const body = await parseJson(c, CreateConversationSchema);
-      const defaults = getDefaultModelSelection();
-      const providerId = body.providerId ?? defaults.providerId;
-      const modelId = body.modelId ?? (body.providerId ? getProvider(body.providerId)?.models[0]?.id : defaults.modelId);
-      if (!modelId) throw new AppError('MODEL_NOT_FOUND', { status: 404 });
-      assertModelSelection(providerId, modelId);
-      const conversation = await db.createConversation({
+      let providerId: ProviderId;
+      let modelId: string;
+      if (body.providerId) {
+        providerId = body.providerId;
+        const resolved = await resolveProvider(userId, providerId, db);
+        modelId = body.modelId ?? resolved?.models[0]?.id ?? '';
+        if (!resolved || !resolved.models.some((model) => model.id === modelId)) throw modelNotFound();
+      } else {
+        const defaults = await resolveDefaultModelSelection(userId, db);
+        providerId = defaults.providerId;
+        modelId = body.modelId ?? defaults.modelId;
+        if (body.modelId) {
+          const resolved = await resolveProvider(userId, providerId, db);
+          if (!resolved?.models.some((model) => model.id === modelId)) throw modelNotFound();
+        }
+      }
+      const conversation = await db.createConversation(userId, {
         title: body.title,
         providerId,
         modelId,
@@ -361,21 +468,23 @@ export function createApp(options: AppOptions = {}): Hono {
   });
 
   app.get('/api/conversations/:id', async (c) => {
-    const conversation = await db.getConversation(c.req.param('id'));
+    const userId = c.get('userId');
+    const conversation = await db.getConversation(userId, c.req.param('id'));
     if (!conversation) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
     return c.json({ conversation });
   });
 
   app.patch('/api/conversations/:id', async (c) => {
     try {
+      const userId = c.get('userId');
       const id = c.req.param('id');
       const body = await parseJson(c, UpdateConversationSchema);
-      const current = await db.getConversation(id);
+      const current = await db.getConversation(userId, id);
       if (!current) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       const providerId = body.providerId ?? current.providerId;
       const modelId = body.modelId ?? current.modelId;
-      assertModelSelection(providerId, modelId);
-      const conversation = await db.updateConversation(id, { ...body, providerId, modelId });
+      await assertUserModelSelection(userId, providerId, modelId, db);
+      const conversation = await db.updateConversation(userId, id, { ...body, providerId, modelId });
       if (!conversation) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       return c.json({ conversation });
     } catch (error) {
@@ -384,74 +493,81 @@ export function createApp(options: AppOptions = {}): Hono {
   });
 
   app.delete('/api/conversations/:id', async (c) => {
-    const deleted = await db.deleteConversation(c.req.param('id'));
+    const userId = c.get('userId');
+    const deleted = await db.deleteConversation(userId, c.req.param('id'));
     if (!deleted) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
     return c.json({ ok: true as const });
   });
 
   app.get('/api/conversations/:id/messages', async (c) => {
+    const userId = c.get('userId');
     const id = c.req.param('id');
-    if (!await db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
-    return c.json({ messages: await db.getMessages(id) });
+    if (!await db.getConversation(userId, id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
+    return c.json({ messages: await db.getMessages(userId, id) });
   });
 
   app.get('/api/conversations/:id/artifacts', async (c) => {
+    const userId = c.get('userId');
     const id = c.req.param('id');
-    if (!await db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
-    return c.json({ artifacts: await db.getArtifacts(id) });
+    if (!await db.getConversation(userId, id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
+    return c.json({ artifacts: await db.getArtifacts(userId, id) });
   });
 
   app.get('/api/conversations/:id/artifacts/:slug/versions/:version', async (c) => {
+    const userId = c.get('userId');
     const id = c.req.param('id');
-    if (!await db.getConversation(id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
+    if (!await db.getConversation(userId, id)) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' }));
     const version = Number(c.req.param('version'));
     if (!Number.isSafeInteger(version) || version < 1) {
       return jsonError(c, new AppError('UNKNOWN', { status: 400, message: 'A versão do artefato é inválida.' }));
     }
-    const artifactVersion = await db.getArtifactVersion(id, c.req.param('slug'), version);
+    const artifactVersion = await db.getArtifactVersion(userId, id, c.req.param('slug'), version);
     if (!artifactVersion) return jsonError(c, new AppError('UNKNOWN', { status: 404, message: 'Versão do artefato não encontrada.' }));
     return c.json({ version: artifactVersion });
   });
 
   app.post('/api/chat', async (c) => {
-    let request: ReturnType<typeof ChatRequestSchema.parse>;
     try {
-      request = await parseJson(c, ChatRequestSchema);
-      const selection = assertModelSelection(request.providerId, request.modelId);
-      let conversation = request.conversationId ? await db.getConversation(request.conversationId) : null;
+      const userId = c.get('userId');
+      const request = await parseJson(c, ChatRequestSchema);
+      // Limite de uso: 20 inícios de chat/minuto, ANTES de criar qualquer
+      // registro ou tocar no upstream.
+      await rateLimit.checkChatStart(userId);
+      const selection = await assertUserModelSelection(userId, request.providerId, request.modelId, db);
+      let conversation = request.conversationId ? await db.getConversation(userId, request.conversationId) : null;
       if (request.conversationId && !conversation) {
         throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       }
       if (!conversation) {
-        conversation = await db.createConversation({ providerId: selection.providerId, modelId: selection.model.id });
-      } else if (conversation.providerId !== selection.providerId || conversation.modelId !== selection.model.id) {
-        conversation = await db.updateConversation(conversation.id, {
-          providerId: selection.providerId,
+        conversation = await db.createConversation(userId, { providerId: selection.provider.id, modelId: selection.model.id });
+      } else if (conversation.providerId !== selection.provider.id || conversation.modelId !== selection.model.id) {
+        conversation = await db.updateConversation(userId, conversation.id, {
+          providerId: selection.provider.id,
           modelId: selection.model.id,
         });
         if (!conversation) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       }
 
-      await db.insertMessage({
+      await db.insertMessage(userId, {
         conversationId: conversation.id,
         role: 'user',
         content: request.content,
-        providerId: selection.providerId,
+        providerId: selection.provider.id,
         modelId: selection.model.id,
       });
       const context = requestContext(
         conversation.systemPrompt,
-        await db.getMessages(conversation.id),
-        await db.getArtifacts(conversation.id),
+        await db.getMessages(userId, conversation.id),
+        await db.getArtifacts(userId, conversation.id),
         selection.model.ctx,
       );
       const promptText = context.messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-      const assistant = await db.insertMessage({
+      const assistant = await db.insertMessage(userId, {
         conversationId: conversation.id,
         role: 'assistant',
         content: '',
         reasoning: '',
-        providerId: selection.providerId,
+        providerId: selection.provider.id,
         modelId: selection.model.id,
       });
       const requestSignal = c.req.raw.signal;
@@ -482,11 +598,17 @@ export function createApp(options: AppOptions = {}): Hono {
       const producedVersions: Array<{ slug: string; version: number; content: string; completionText: string; costBasisTokens: number }> = [];
       const completedArtifactEnds: Array<{ slug: string; version: number; truncated: boolean }> = [];
       let parserEnded = false;
+      let streamSlotId: string | null = null;
 
       const persistPartial = async (force = false) => {
         const now = Date.now();
         if (!force && now - lastPersistedAt < 2_000 && content.length - lastPersistedLength < 4_000) return;
-        await db.updateMessage(assistant.id, { content, reasoning });
+        // Renova a expiração do slot de stream junto com a persistência
+        // parcial (escritas já existentes; sem custo adicional relevante).
+        await Promise.all([
+          db.updateMessage(userId, assistant.id, { content, reasoning }),
+          streamSlotId ? rateLimit.touchStream(userId, streamSlotId) : Promise.resolve(),
+        ]);
         lastPersistedAt = now;
         lastPersistedLength = content.length;
       };
@@ -511,8 +633,8 @@ export function createApp(options: AppOptions = {}): Hono {
             continue;
           }
           if (parserEvent.kind === 'artifact_open') {
-            const existing = (await db.getArtifacts(conversation.id)).find((artifact) => artifact.slug === parserEvent.slug);
-            const artifact = await db.upsertArtifact({
+            const existing = (await db.getArtifacts(userId, conversation.id)).find((artifact) => artifact.slug === parserEvent.slug);
+            const artifact = await db.upsertArtifact(userId, {
               conversationId: conversation.id,
               slug: parserEvent.slug,
               kind: parserEvent.type,
@@ -559,7 +681,7 @@ export function createApp(options: AppOptions = {}): Hono {
             const open = openArtifacts.get(parserEvent.slug);
             const body = artifactBuffers.get(parserEvent.slug) ?? '';
             if (open) {
-              await db.insertArtifactVersion({
+              await db.insertArtifactVersion(userId, {
                 conversationId: conversation.id,
                 slug: parserEvent.slug,
                 kind: open.kind,
@@ -584,7 +706,7 @@ export function createApp(options: AppOptions = {}): Hono {
             artifactBuffers.delete(parserEvent.slug);
             continue;
           }
-          const current = (await db.getArtifacts(conversation.id)).find((artifact) => artifact.slug === parserEvent.slug);
+          const current = (await db.getArtifacts(userId, conversation.id)).find((artifact) => artifact.slug === parserEvent.slug);
           const currentVersion = current?.versions.find((version) => version.version === current.currentVersion);
           if (!current || !currentVersion) {
             await emit(stream, {
@@ -608,7 +730,7 @@ export function createApp(options: AppOptions = {}): Hono {
           }
           const version = current.currentVersion + 1;
           const patchText = parserEvent.edits.map((edit) => `${edit.find}\n${edit.replace}`).join('\n');
-          await db.insertArtifactVersion({
+          await db.insertArtifactVersion(userId, {
             conversationId: conversation.id,
             slug: parserEvent.slug,
             kind: current.kind,
@@ -657,6 +779,7 @@ export function createApp(options: AppOptions = {}): Hono {
         await Promise.all(producedVersions.map(async (item, index) => {
           const share = sizes[index] / totalSize;
           await db.updateArtifactVersionCost(
+            userId,
             conversation.id,
             item.slug,
             item.version,
@@ -668,7 +791,7 @@ export function createApp(options: AppOptions = {}): Hono {
 
       const emitArtifactEnds = async (stream: Parameters<typeof streamSSE>[1] extends (stream: infer T) => Promise<void> ? T : never) => {
         for (const completed of completedArtifactEnds) {
-          const version = await db.getArtifactVersion(conversation.id, completed.slug, completed.version);
+          const version = await db.getArtifactVersion(userId, conversation.id, completed.slug, completed.version);
           await emit(stream, {
             type: 'artifact_end',
             slug: completed.slug,
@@ -683,138 +806,166 @@ export function createApp(options: AppOptions = {}): Hono {
         completedArtifactEnds.length = 0;
       };
 
-      const response = streamSSE(
-        c,
-        async (stream) => {
-          stream.onAbort(() => {
-            clientAborted = true;
-            if (!upstreamController.signal.aborted) upstreamController.abort(new DOMException('Cliente desconectou.', 'AbortError'));
-          });
-          try {
-            for await (const event of streamOpenAICompatible({
-              providerId: selection.providerId,
-              modelId: selection.model.id,
-              messages: context.messages,
-              temperature: request.temperature,
-              signal: upstreamController.signal,
-              fetchImpl: options.fetchImpl,
-            })) {
-              if (event.kind === 'text') {
-                await consumeParserEvents(parser.push(event.text), stream);
-                await persistPartial();
-              } else if (event.kind === 'reasoning') {
-                reasoning += event.reasoning;
-                if (!stream.aborted) {
-                  await writeEnvelope(stream, {
-                    type: 'reasoning',
-                    reasoning: event.reasoning,
-                    conversationId: conversation.id,
-                    messageId: assistant.id,
-                  });
-                }
-                await persistPartial();
-              } else if (event.kind === 'usage') {
-                rawUsage = event.usage;
-              } else if (event.kind === 'finish') {
-                finishReason = event.finishReason;
-              }
-            }
+      // Slot de stream ativo: no máximo 2 por usuário. A liberação acontece
+      // no finally do stream (sucesso, erro ou aborto do cliente), com flag
+      // para nunca liberar duas vezes.
+      streamSlotId = await rateLimit.acquireStreamSlot(userId);
+      let streamSlotReleased = false;
+      const releaseStreamSlot = async () => {
+        if (streamSlotReleased) return;
+        streamSlotReleased = true;
+        try {
+          if (streamSlotId) await rateLimit.releaseStreamSlot(userId, streamSlotId);
+        } catch {
+          // Best-effort: se a liberação falhar, a expiração de 10 minutos
+          // do slot cobre o vazamento.
+        }
+      };
 
-            await finishParser(stream);
-            const calculated = calculateUsageAndCost(selection.model, {
-              raw: rawUsage,
-              promptText,
-              completionText: completionText(),
-              reasoningText: reasoning,
+      let response: Response;
+      try {
+        response = streamSSE(
+          c,
+          async (stream) => {
+            stream.onAbort(() => {
+              clientAborted = true;
+              if (!upstreamController.signal.aborted) upstreamController.abort(new DOMException('Cliente desconectou.', 'AbortError'));
             });
-            await attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
-            await emitArtifactEnds(stream);
-            finishReason = finishReason ?? 'stop';
-            await db.updateMessage(assistant.id, {
-              content,
-              reasoning,
-              usage: calculated.usage,
-              cost: calculated.cost,
-              finishReason,
-              latencyMs: Date.now() - startedAt,
-            });
-            if (!stream.aborted) {
-              await writeEnvelope(stream, {
-                type: 'usage',
+            try {
+              for await (const event of streamOpenAICompatible({
+                providerId: selection.provider.id,
+                modelId: selection.model.id,
+                // Dados EFETIVOS do usuário, resolvidos dentro da requisição.
+                baseURL: selection.provider.baseURL,
+                apiKey: selection.provider.apiKey,
+                requiresApiKey: selection.provider.requiresApiKey,
+                messages: context.messages,
+                temperature: request.temperature,
+                signal: upstreamController.signal,
+                fetchImpl: options.fetchImpl,
+              })) {
+                if (event.kind === 'text') {
+                  await consumeParserEvents(parser.push(event.text), stream);
+                  await persistPartial();
+                } else if (event.kind === 'reasoning') {
+                  reasoning += event.reasoning;
+                  if (!stream.aborted) {
+                    await writeEnvelope(stream, {
+                      type: 'reasoning',
+                      reasoning: event.reasoning,
+                      conversationId: conversation.id,
+                      messageId: assistant.id,
+                    });
+                  }
+                  await persistPartial();
+                } else if (event.kind === 'usage') {
+                  rawUsage = event.usage;
+                } else if (event.kind === 'finish') {
+                  finishReason = event.finishReason;
+                }
+              }
+
+              await finishParser(stream);
+              const calculated = calculateUsageAndCost(selection.model, {
+                raw: rawUsage,
+                promptText,
+                completionText: completionText(),
+                reasoningText: reasoning,
+              });
+              await attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
+              await emitArtifactEnds(stream);
+              finishReason = finishReason ?? 'stop';
+              await db.updateMessage(userId, assistant.id, {
+                content,
+                reasoning,
                 usage: calculated.usage,
                 cost: calculated.cost,
-                conversationId: conversation.id,
-                messageId: assistant.id,
-              });
-              await writeEnvelope(stream, {
-                type: 'done',
-                done: true,
                 finishReason,
-                truncated: context.truncated,
+                latencyMs: Date.now() - startedAt,
+              });
+              if (!stream.aborted) {
+                await writeEnvelope(stream, {
+                  type: 'usage',
+                  usage: calculated.usage,
+                  cost: calculated.cost,
+                  conversationId: conversation.id,
+                  messageId: assistant.id,
+                });
+                await writeEnvelope(stream, {
+                  type: 'done',
+                  done: true,
+                  finishReason,
+                  truncated: context.truncated,
+                  usage: calculated.usage,
+                  cost: calculated.cost,
+                  conversationId: conversation.id,
+                  messageId: assistant.id,
+                });
+              }
+            } catch (error) {
+              const normalized = normalizeError(error);
+              const aborted = clientAborted || requestSignal.aborted || stream.aborted;
+              await finishParser(stream);
+              const calculated = calculateUsageAndCost(selection.model, {
+                raw: rawUsage,
+                promptText,
+                completionText: completionText(),
+                reasoningText: reasoning,
+              });
+              await attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
+              await emitArtifactEnds(stream);
+              const terminalReason = aborted ? 'aborted' : 'error';
+              await db.updateMessage(userId, assistant.id, {
+                content,
+                reasoning,
                 usage: calculated.usage,
                 cost: calculated.cost,
-                conversationId: conversation.id,
-                messageId: assistant.id,
+                finishReason: terminalReason,
+                errorCode: aborted ? null : normalized.code,
+                latencyMs: Date.now() - startedAt,
               });
+              if (!aborted && !stream.aborted) {
+                await writeEnvelope(stream, {
+                  type: 'error',
+                  error: errorPayload(normalized),
+                  conversationId: conversation.id,
+                  messageId: assistant.id,
+                });
+                await writeEnvelope(stream, {
+                  type: 'done',
+                  done: true,
+                  finishReason: terminalReason,
+                  truncated: context.truncated,
+                  usage: calculated.usage,
+                  cost: calculated.cost,
+                  conversationId: conversation.id,
+                  messageId: assistant.id,
+                });
+              }
+            } finally {
+              await persistPartial(true);
+              await releaseStreamSlot();
+              requestSignal.removeEventListener('abort', abortFromClient);
+              if (!upstreamController.signal.aborted && (clientAborted || stream.aborted)) upstreamController.abort();
             }
-          } catch (error) {
+          },
+          async (error, stream) => {
             const normalized = normalizeError(error);
-            const aborted = clientAborted || requestSignal.aborted || stream.aborted;
-            await finishParser(stream);
-            const calculated = calculateUsageAndCost(selection.model, {
-              raw: rawUsage,
-              promptText,
-              completionText: completionText(),
-              reasoningText: reasoning,
-            });
-            await attributeArtifactCost(calculated.usage.completionTokens, calculated.cost.usd);
-            await emitArtifactEnds(stream);
-            const terminalReason = aborted ? 'aborted' : 'error';
-            await db.updateMessage(assistant.id, {
-              content,
-              reasoning,
-              usage: calculated.usage,
-              cost: calculated.cost,
-              finishReason: terminalReason,
-              errorCode: aborted ? null : normalized.code,
-              latencyMs: Date.now() - startedAt,
-            });
-            if (!aborted && !stream.aborted) {
+            if (!stream.aborted) {
               await writeEnvelope(stream, {
                 type: 'error',
                 error: errorPayload(normalized),
                 conversationId: conversation.id,
                 messageId: assistant.id,
               });
-              await writeEnvelope(stream, {
-                type: 'done',
-                done: true,
-                finishReason: terminalReason,
-                truncated: context.truncated,
-                usage: calculated.usage,
-                cost: calculated.cost,
-                conversationId: conversation.id,
-                messageId: assistant.id,
-              });
             }
-          } finally {
-            await persistPartial(true);
-            requestSignal.removeEventListener('abort', abortFromClient);
-            if (!upstreamController.signal.aborted && (clientAborted || stream.aborted)) upstreamController.abort();
-          }
-        },
-        async (error, stream) => {
-          const normalized = normalizeError(error);
-          if (!stream.aborted) {
-            await writeEnvelope(stream, {
-              type: 'error',
-              error: errorPayload(normalized),
-              conversationId: conversation.id,
-              messageId: assistant.id,
-            });
-          }
-        },
-      );
+          },
+        );
+      } catch (error) {
+        // streamSSE falhou antes de iniciar o callback: libera o slot aqui.
+        await releaseStreamSlot();
+        throw error;
+      }
       return response;
     } catch (error) {
       return routeErrorHandler(error, c);
@@ -840,7 +991,7 @@ export function createApp(options: AppOptions = {}): Hono {
   return app;
 }
 
-let cachedApp: Hono | null = null;
+let cachedApp: Hono<{ Variables: AppVariables }> | null = null;
 
 /**
  * Criação preguiçosa e memoizada.
@@ -850,7 +1001,7 @@ let cachedApp: Hono | null = null;
  * — um 500 opaco, sem chance de explicar a causa. Adiada, a falha vira uma
  * resposta JSON legível (ver api/[...route].ts).
  */
-export function getApp(): Hono {
+export function getApp(): Hono<{ Variables: AppVariables }> {
   cachedApp ??= createApp();
   return cachedApp;
 }

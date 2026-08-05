@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { UserButton } from '@clerk/react';
 import { ArrowRight, BarChart3, Download, Menu, Moon, PanelLeft, RefreshCw, Sun, X } from 'lucide-react';
 import { useChatStore } from '../store/chat';
 import { useSettingsStore } from '../store/settings';
@@ -176,6 +177,9 @@ export function ChatView() {
             <button type="button" className="btn btn-icon" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Usar tema claro' : 'Usar tema escuro'} title="Alternar tema">
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>
+            <span className="account-button" title="Conta e sair">
+              <UserButton />
+            </span>
           </div>
         </header>
 

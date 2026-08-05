@@ -1,5 +1,18 @@
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+-- Migração 001 — schema base (SQLite).
+--
+-- Cópia fiel de src/server/db/schema.sql, com três diferenças intencionais:
+--   1. Sem "PRAGMA journal_mode = WAL" nem "PRAGMA foreign_keys = ON": são
+--      configurações de conexão, não schema — o aplicativo as aplica ao abrir
+--      o banco, e o WAL não pode ser ativado dentro de transação.
+--   2. Sem idx_conversations_user: em bancos legados (pré-multiusuário) a
+--      coluna user_id não existe e o CREATE INDEX falharia; a coluna e o
+--      índice são criados na migração 002.
+--   3. Tudo aqui é idempotente (IF NOT EXISTS), então a migração roda sem
+--      efeito sobre bancos que já têm o schema antigo.
+--
+-- Bancos novos: a 001 cria tudo e a 002 apenas confirma o que já existe.
+-- Bancos legados: a 001 só cria o que falta (users, FTS, etc.) e a 002
+-- transforma o schema antigo no novo (user_id, PK composta, dono, v2).
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -42,7 +55,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   content,

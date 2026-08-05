@@ -26,6 +26,7 @@ export const ErrorCodeSchema = z.enum([
   'INVALID_API_KEY',
   'MODEL_NOT_FOUND',
   'UPSTREAM_TIMEOUT',
+  'UNAUTHORIZED',
   'UNKNOWN',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;

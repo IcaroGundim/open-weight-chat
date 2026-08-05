@@ -1,3 +1,4 @@
+import { ApiError, authHeaders } from './token-provider';
 import type {
   ChatMessage,
   ChatRequest,
@@ -19,24 +20,12 @@ import type {
   Usage,
 } from './types';
 
+export { ApiError };
+
 const JSON_HEADERS = {
   Accept: 'application/json',
   'Content-Type': 'application/json',
 };
-
-export class ApiError extends Error {
-  status: number;
-  code?: string;
-  details?: string;
-
-  constructor(message: string, status = 0, code?: string, details?: string) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -334,8 +323,14 @@ async function readJson(response: Response): Promise<unknown> {
 async function requestJson<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(path, init);
+    response = await fetch(path, {
+      ...init,
+      headers: { ...(init?.headers ?? {}), ...(await authHeaders()) },
+    });
   } catch (error) {
+    // ApiError já carrega a mensagem certa (ex.: 401 de sessão expirada) —
+    // não embrulhar em "Não foi possível conectar ao servidor".
+    if (error instanceof ApiError) throw error;
     throw new ApiError(error instanceof Error ? error.message : 'Não foi possível conectar ao servidor.');
   }
 
@@ -577,7 +572,7 @@ export async function streamChat(
 ): Promise<void> {
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { ...JSON_HEADERS, Accept: 'text/event-stream' },
+    headers: { ...JSON_HEADERS, Accept: 'text/event-stream', ...(await authHeaders()) },
     body: JSON.stringify(request),
     signal,
   });

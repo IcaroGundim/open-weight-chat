@@ -14,11 +14,14 @@
     "build": "vite build && esbuild src/server/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/server.js --external:node:*",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx scripts/db/migrate.ts",
     "design": "node scripts/contrast.mjs && node scripts/audit-design.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@clerk/backend": "^3.15.0",
+    "@clerk/react": "^6.12.10",
     "@hono/node-server": "^1.19.2",
     "@neondatabase/serverless": "^1.1.0",
     "@shikijs/langs": "^3.23.0",

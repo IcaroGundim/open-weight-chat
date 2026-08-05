@@ -1,10 +1,22 @@
 # Open Weight Chat
 
-Cliente de chat self-hosted para provedores OpenAI-compatíveis, com streaming SSE, Markdown seguro, LaTeX, destaque de código, persistência SQLite e custo por mensagem.
+Cliente de chat self-hosted para provedores OpenAI-compatíveis, com streaming SSE, Markdown seguro, LaTeX, destaque de código, persistência SQLite/Postgres (Neon) e custo por mensagem.
+
+## Serviço multiusuário
+
+Este projeto virou um serviço multiusuário **BYOK** (bring your own key): cada pessoa entra com **Google ou e-mail via Clerk**, cadastra as **próprias chaves de provedor** em **Configurações → Provedores** e só vê as próprias conversas, provedores, artefatos e custos. Não há créditos nem cobrança na plataforma — e **nenhuma chave da plataforma é usada em produção**: a única fonte de chaves é o cadastro de cada usuário.
+
+Deslogado, o app mostra a tela de login; depois de entrar, todas as chamadas a `/api/*` levam o token da sessão no header `Authorization` (inclusive o streaming SSE) e o servidor valida o token com o Clerk antes de qualquer acesso ao banco — sem sessão válida, a resposta é `401`. Recursos de outro usuário devolvem `404`, sem revelar que existem. A exceção é `/api/health`, que continua público e mínimo.
+
+> Chaves de ambiente (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `KIMI_API_KEY`, `OPENROUTER_API_KEY`) funcionam **apenas em desenvolvimento**, com `ALLOW_ENV_API_KEYS=true` no `.env`. Em produção elas nunca são usadas, nem como fallback.
 
 ## Executar
 
 Requer Node 24.16+ e pnpm 11.
+
+1. Crie um app no painel do Clerk (https://dashboard.clerk.com) e copie `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` e `VITE_CLERK_PUBLISHABLE_KEY` para o `.env` (o Vite lê variáveis `VITE_*` do `.env`).
+2. No painel do Clerk, habilite os provedores de login **Google** e **e-mail verificado**.
+3. Rode:
 
 ```powershell
 pnpm install
@@ -12,7 +24,7 @@ Copy-Item .env.example .env
 pnpm dev
 ```
 
-Abra `http://localhost:5173`. As chaves ficam apenas no processo Node; configure no `.env` `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `KIMI_API_KEY` e/ou `OPENROUTER_API_KEY`. Ollama pode ser usado sem chave em `http://localhost:11434/v1`.
+Abra `http://localhost:5173` e entre com sua conta. Em desenvolvimento, **sem `DATABASE_URL` o app usa SQLite como antes** (banco em `chat.db`). As chaves de provedor podem ser cadastradas pela interface — ou, só em dev, via `.env` com `ALLOW_ENV_API_KEYS=true`. Ollama pode ser usado sem chave em `http://localhost:11434/v1`.
 
 Para produção:
 
@@ -23,9 +35,7 @@ node dist/server.js
 
 ## Deploy na Vercel com Neon
 
-O projeto usa SQLite quando `DATABASE_URL` não existe e troca automaticamente
-para o Neon na Vercel. O handler em `api/[...route].ts` mantém todas as rotas
-`/api/*` na mesma origem do frontend e preserva o streaming SSE.
+O projeto usa SQLite quando `DATABASE_URL` não existe e troca automaticamente para o Neon na Vercel. O handler em `api/[...route].ts` mantém todas as rotas `/api/*` na mesma origem do frontend e preserva o streaming SSE.
 
 No painel **Vercel → Project → Settings → Environment Variables**, configure:
 
@@ -33,27 +43,48 @@ No painel **Vercel → Project → Settings → Environment Variables**, configu
 |---|---|
 | `DATABASE_URL` | Connection string com pooling copiada em **Neon → Connect** |
 | `PROVIDER_SECRET_KEY` | Segredo aleatório estável, com pelo menos 16 caracteres |
+| `CLERK_SECRET_KEY` | Chave secreta do app Clerk (Dashboard → API Keys) — valida os tokens em `/api/*` |
+| `CLERK_PUBLISHABLE_KEY` | Chave publicável do Clerk (começa com `pk_`) |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Mesmo valor de `CLERK_PUBLISHABLE_KEY` — é lida pelo Vite no build |
+| `CLERK_FRONTEND_API_ORIGIN` | Origem do frontend Clerk, ex.: `https://SEU-APP.clerk.accounts.dev` — o valor exato aparece no painel Clerk; o servidor a usa também para montar o CSP automaticamente |
+| `APP_ORIGIN` | **Obrigatória em produção.** Origem pública exata do deploy, ex.: `https://SEU-PROJETO.vercel.app`, sem caminho/query/fragmento. É a única origem que recebe CORS para `/api/*`. |
 
-`PROVIDER_SECRET_KEY` não é uma chave de provedor. Ela cifra as chaves de
-OpenRouter, DeepSeek etc. guardadas no Neon e precisa permanecer igual entre
-deploys. Para gerar uma no PowerShell sem exibi-la no histórico do shell:
+**Variáveis `VITE_*` são embutidas no bundle no momento do build**: depois de alterá-las, é preciso rodar um novo build/deploy na Vercel para valerem. As demais são lidas em runtime.
+
+`PROVIDER_SECRET_KEY` não é uma chave de provedor. Ela cifra as chaves de OpenRouter, DeepSeek etc. guardadas no Neon e precisa permanecer igual entre deploys. Para gerar uma no PowerShell sem exibi-la no histórico do shell:
 
 ```powershell
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Copie o resultado diretamente para a variável da Vercel. Depois, faça um novo
-deploy e cadastre novamente os provedores em **Configurações → Provedores**;
-as configurações do SQLite local não são copiadas automaticamente para o Neon.
+Copie o resultado diretamente para a variável da Vercel. Depois, faça um novo deploy; cada usuário cadastra os próprios provedores em **Configurações → Provedores** (as configurações do SQLite local não são copiadas automaticamente para o Neon).
 
-Depois do deploy, abra `https://SEU-PROJETO.vercel.app/api/health`. O resultado
-correto contém `"database":"neon"` e `"secretStorage":{"available":true}`.
+O schema é versionado em `scripts/db/migrations` e aplicado com `pnpm db:migrate` — não há mais criação automática de tabelas em requisições. Para um banco Neon novo, rode `pnpm db:migrate up` antes do primeiro deploy; para um deploy que já tem dados, siga a seção abaixo.
 
-O primeiro acesso cria as tabelas necessárias no banco. Para uso público,
-ative também **Vercel Deployment Protection** ou outra autenticação: sem isso,
-qualquer pessoa com a URL pode consumir o saldo das APIs configuradas.
+Depois do deploy, abra `https://SEU-PROJETO.vercel.app/api/health`. A resposta pública correta é apenas `{"ok":true}`; detalhes de banco e armazenamento de chaves não são expostos.
 
-O banco é criado em `chat.db`, usa WAL/FTS5 e é ignorado pelo Git.
+O banco SQLite local é criado em `chat.db`, usa WAL/FTS5 e é ignorado pelo Git.
+
+### Origem, CORS e provedores locais
+
+Em produção, defina `APP_ORIGIN` com a origem HTTPS pública do frontend. A API só emite os cabeçalhos CORS para essa origem; no deploy usual da Vercel, frontend e `/api` compartilham a mesma origem. Em desenvolvimento, `APP_ORIGIN` pode ficar vazia porque o proxy do Vite encaminha `/api` para o backend local.
+
+Ollama em `localhost` e qualquer URL `http`, loopback, privada, link-local ou de metadata são recusados em produção. Para oferecer Ollama no deploy, exponha um endpoint OpenAI-compatível HTTPS publicamente acessível e cadastre essa URL por usuário; o servidor continuará validando DNS e redirecionamentos antes de cada chamada.
+
+## Migração do deploy existente
+
+Se já existe um deploy com dados (conversas e provedores com chaves no formato antigo `v1`), a migração para o multiusuário segue este checklist:
+
+1. **Proteja temporariamente o deploy atual** — ative a Vercel Deployment Protection ou similar, para ninguém usar o serviço aberto durante a transição.
+2. **Faça backup do Neon** — painel Neon → Branches/Backups, ou `pg_dump`.
+3. **Crie a conta do proprietário no Clerk** (login Google/e-mail) e copie o ID `user_...` (painel Clerk → Users).
+4. **Defina `LEGACY_OWNER_CLERK_USER_ID=<user_...>`** na Vercel — apenas durante a migração.
+5. **Rode as migrações**: `pnpm db:migrate status`, depois `pnpm db:migrate up --dry-run` (confira as contagens), depois `pnpm db:migrate up`. O script atribui as conversas e provedores antigos ao proprietário e recifra as chaves `v1` → `v2`; ele **aborta sem alterações** se alguma chave não puder ser lida.
+6. **Configure as variáveis na Vercel** (incluindo as `VITE_*`) e faça um novo deploy.
+7. **Valide**: o login do proprietário mostra o histórico antigo; um segundo usuário não vê nada do proprietário; cada um usa as próprias chaves.
+8. **Remova `LEGACY_OWNER_CLERK_USER_ID`** depois da migração.
+
+> ⚠️ **NUNCA troque `PROVIDER_SECRET_KEY` depois de haver chaves `v2` no banco.** As chaves são cifradas com ela (AES-256-GCM) e não poderão mais ser decifradas. A migração `v1 → v2` valida cada chave antes de recifrar e aborta sem alterações se alguma falhar — mas isso protege só a migração; uma troca posterior é irrecuperável.
 
 > ⚠️ **Os preços deste repositório não são autoritativos.** O catálogo de modelos e preços está centralizado em [providers.config.ts](src/server/providers.config.ts) e foi lido em 04/08/2026 — os valores do DeepSeek em particular vieram de busca, não da documentação oficial, e divergem do que o OpenRouter publica. Provedores reprecificam e aposentam IDs com frequência (`deepseek-chat` sumiu do catálogo em julho/2026). **Revalide antes de usar qualquer número como projeção de custo.** A procedência de cada valor está em [PLANO.md §13](PLANO.md).
 
@@ -61,21 +92,18 @@ O banco é criado em `chat.db`, usa WAL/FTS5 e é ignorado pelo Git.
 
 Além dos cinco embutidos (DeepSeek, GLM/Z.ai, Kimi, OpenRouter e Ollama), **qualquer endpoint OpenAI-compatível pode ser ligado** — OpenCode Zen, Groq, Together, Fireworks, um `llama.cpp` na sua rede. O cliente de streaming é um só; o que muda é `baseURL`, chave e id de modelo.
 
-Três formas, que podem coexistir:
-
 | Onde | Quando usar |
 |---|---|
-| **Configurações → Provedores** | O caminho normal: cadastra um provedor novo ou configura um embutido (como OpenRouter) pela interface; os modelos aparecem automaticamente. |
-| `providers.local.json` na raiz | Configuração versionável fora do Git, útil em desenvolvimento. |
-| Variável `CUSTOM_PROVIDERS` (mesmo JSON, uma linha) | Deploy em plataformas que só aceitam variáveis de ambiente. |
+| **Configurações → Provedores** | O caminho normal — agora **por usuário**: cada conta cadastra as próprias chaves, que ficam cifradas no banco com contexto do usuário; os modelos aparecem automaticamente após a descoberta. |
+| `providers.local.json` na raiz ou variável `CUSTOM_PROVIDERS` (mesmo JSON, uma linha) | **Somente desenvolvimento** (o arquivo é ignorado pelo Git). Em produção a plataforma não usa chaves de ambiente — a única fonte é o cadastro do usuário. |
 
 ### Chaves cadastradas pela interface
 
-A chave sobe uma vez, é cifrada com **AES-256-GCM** e guardada no banco. **Ela nunca volta para o navegador** — a tela só informa se existe. A chave-mestra é criada automaticamente pelo servidor no arquivo local `.provider-secret`, que já está ignorado pelo Git. `PROVIDER_SECRET_KEY` continua disponível apenas como sobrescrita opcional para instalações que já têm uma chave-mestra própria.
+A chave sobe uma vez e é cifrada com **AES-256-GCM** no formato `v2`, com contexto autenticado `userId + providerId` — ou seja, a chave de um usuário não pode ser decifrada no contexto de outro. Fica guardada no banco e **nunca volta para o navegador** — a tela só informa se existe. Em desenvolvimento, a chave-mestra é criada automaticamente pelo servidor no arquivo local `.provider-secret` (ignorado pelo Git); **na Vercel a chave-mestra vem só de `PROVIDER_SECRET_KEY`**.
 
 Ao salvar um provedor pela interface, o servidor consulta `GET <baseURL>/models`, grava os modelos retornados e atualiza o seletor do chat. Para configurar o OpenRouter, use o identificador `openrouter` e a URL base `https://openrouter.ai/api/v1`; não é preciso criar um duplicado. O provedor precisa expor esse endpoint no formato OpenAI-compatible; quando a resposta não informa a janela de contexto, o app usa uma estimativa conservadora de 131.072 tokens.
 
-Se `.provider-secret` for apagado ou perdido, as chaves antigas não poderão ser decifradas e precisarão ser cadastradas novamente. Inclua esse arquivo junto com o banco em um backup privado. Nos dois arquivos de configuração (`providers.local.json` e `CUSTOM_PROVIDERS`) a regra continua sendo outra: ali só entra o *nome* da variável de ambiente, nunca a chave.
+Se `.provider-secret` (ou `PROVIDER_SECRET_KEY`) for apagado ou perdido, as chaves antigas não poderão mais ser decifradas e precisarão ser cadastradas novamente. Inclua o arquivo junto com o banco em um backup privado. Nos arquivos de configuração (`providers.local.json` e `CUSTOM_PROVIDERS`) a regra continua sendo outra: ali só entra o *nome* da variável de ambiente, nunca a chave.
 
 ```json
 [
@@ -104,11 +132,29 @@ Três regras que o validador aplica, todas com erro visível na interface — na
 - **`ctx` é obrigatório.** É ele que dirige o corte de histórico; um valor ausente ou errado quebraria o truncamento em silêncio.
 - **`pricing` é opcional.** Sem ele o custo aparece como indisponível — honesto — em vez de zero, que seria mentira. Sem `verifiedAt`, o provedor entra marcado como não verificado.
 
+### Endpoints próprios e proteção SSRF
+
+Endpoints OpenAI-compatíveis próprios passam por validação no servidor:
+
+- **HTTPS obrigatório em produção**; credenciais embutidas na URL são rejeitadas.
+- **Redirecionamentos e IPs/hosts privados, loopback, link-local, multicast e metadata são bloqueados**; a resolução DNS usa um agente de conexão restrito (proteção contra SSRF e DNS rebinding).
+- Em desenvolvimento, somente `http://localhost` é permitido.
+
+### Limites por usuário
+
+Para proteger o custo de cada conta (BYOK), o servidor aplica limites por usuário, com contadores atômicos compartilhados entre instâncias (Postgres):
+
+- **20 inícios de chat por minuto**;
+- **5 descobertas de modelos por minuto**;
+- **no máximo 2 streams ativos por usuário**;
+- o catálogo descoberto é limitado a **500 modelos**.
+
 ## Documentos
 
 | Arquivo | Conteúdo |
 |---|---|
 | [PLANO.md](PLANO.md) | Decisões de arquitetura, provedores, custo e o roteiro original |
+| [PLANO-MULTIUSUARIO.md](PLANO-MULTIUSUARIO.md) | Especificação do serviço multiusuário: Clerk, isolamento, cifragem v2, migração e deploy |
 | [DESIGN.md](DESIGN.md) | Direção visual: tokens, regras, componentes e o porquê de cada escolha |
 | [PLANO-ARTEFATOS.md](PLANO-ARTEFATOS.md) | Especificação da funcionalidade de artefatos |
 
@@ -123,4 +169,4 @@ pnpm design
 
 A direção visual — paleta, tipografia, componentes, regras e as decisões por trás delas — está em [DESIGN.md](DESIGN.md). `pnpm design` verifica contraste (`scripts/contrast.mjs`) e as proibições do sistema (`scripts/audit-design.mjs`).
 
-O frontend usa `react-markdown` como fallback seguro, com `remark-math`/KaTeX lazy e Shiki lazy com engine JavaScript e linguagens curadas. HTML cru não é habilitado, links externos recebem `noopener noreferrer nofollow` e o CSP é aplicado pelo Hono.
+O frontend usa `react-markdown` como fallback seguro, com `remark-math`/KaTeX lazy e Shiki lazy com engine JavaScript e linguagens curadas. HTML cru não é habilitado, links externos recebem `noopener noreferrer nofollow` e o CSP é aplicado pelo Hono, incluindo a origem do Clerk em `script-src`, `connect-src` e `frame-src`.

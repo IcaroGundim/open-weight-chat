@@ -1780,3 +1780,380 @@ kbd {
   .artifact-card-metrics { grid-column: 2 / -1; }
   .artifact-panel-footer { padding-inline: 16px; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Tela de login (Clerk) — usuário deslogado não vê o chat.
+ *
+ * Composição inspirada na linha visual do Hermes Agent / Nous Research
+ * (hermes-agent.nousresearch.com) — título display grande e leve, chips e
+ * caixas com borda em currentColor, ficha com borda, textura de ruído —
+ * mantendo a paleta "Bancada": o painel usa a casca da barra lateral
+ * (constante nos dois temas, §4.3) e o acento é o vinho. Sem gradientes,
+ * sem caixa alta, sem sombra em card (§3.1, §6.3).
+ * ------------------------------------------------------------------------- */
+.login-screen {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(360px, 6fr) minmax(400px, 4fr);
+  background: var(--paper);
+}
+
+/* Painel de marca — mesma casca da barra lateral, nos dois temas. */
+.login-panel {
+  background: var(--sidebar-bg);
+  color: var(--sidebar-ink);
+  display: flex;
+  align-items: center;
+  padding: 56px clamp(28px, 5vw, 80px);
+  position: relative;
+  overflow: hidden;
+}
+/* Textura de ruído sutil (mesma técnica do hermes-agent.nousresearch.com):
+   um SVG de ruído fractal em blend screen, sem gradiente e sem peso. */
+.login-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+}
+.login-panel-inner {
+  max-width: 480px;
+  margin-inline: auto;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+}
+.login-brand {
+  font: 700 15px/1.2 var(--display);
+  color: var(--sidebar-wine);
+  margin: 0 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.login-panel-title {
+  font: 500 clamp(30px, 3.6vw, 44px)/1.05 var(--display);
+  color: var(--sidebar-ink);
+  margin: 0 0 18px;
+  max-width: 16ch;
+}
+.login-panel-text {
+  color: var(--sidebar-ink-2);
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0 0 32px;
+  max-width: 46ch;
+}
+
+/* "O que a bancada mede" — três recursos com ícone em caixa de borda. */
+.login-features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 32px;
+  display: grid;
+  gap: 16px;
+}
+.login-feature {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.login-feature-icon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sidebar-wine);
+  border: 1px solid var(--sidebar-rule);
+  border-radius: var(--r-2);
+}
+.login-feature-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.login-feature-body strong {
+  font: 600 14px/1.3 var(--sans);
+  color: var(--sidebar-ink);
+}
+.login-feature-body span {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--sidebar-ink-2);
+}
+
+/* Ficha de modelo — a peça que carrega a tese (§7.4), como vitrine. */
+.login-meter {
+  border: 1px solid var(--sidebar-rule);
+  border-radius: var(--r-3);
+  padding: 16px 18px;
+  margin: 0 0 32px;
+}
+.login-meter-label {
+  font-size: 12px;
+  color: var(--sidebar-ink-2);
+  margin: 0 0 6px;
+}
+.login-meter-name {
+  font: 600 17px/1.2 var(--display);
+  color: var(--sidebar-ink);
+  margin: 0 0 14px;
+}
+.login-meter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 0;
+}
+.login-meter-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.login-meter-grid dt {
+  font-size: 12px;
+  color: var(--sidebar-ink-2);
+}
+.login-meter-grid dd {
+  font: 500 13px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--sidebar-wine);
+  margin: 0;
+}
+.login-meter-note {
+  font-size: 12px;
+  color: var(--sidebar-ink-2);
+  margin: 12px 0 0;
+}
+
+/* Chips de provedores — borda em currentColor, como no site da Nous. */
+.login-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 32px;
+}
+.login-provider {
+  font-size: 13px;
+  color: var(--sidebar-ink-2);
+  border: 1px solid var(--sidebar-rule);
+  border-radius: var(--r-2);
+  padding: 6px 10px;
+}
+.login-provider:hover {
+  border-color: var(--sidebar-wine);
+  color: var(--sidebar-wine);
+}
+.login-panel-foot {
+  font-size: 13px;
+  color: var(--sidebar-ink-2);
+  margin: 0;
+}
+
+/* Coluna do cartão. */
+.login-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+}
+.login-card {
+  width: min(420px, 100%);
+}
+.login-eyebrow {
+  font: 600 14px/1.2 var(--sans);
+  color: var(--wine);
+  margin: 0 0 14px;
+}
+.login-hint {
+  color: var(--ink-3);
+  font-size: 13px;
+  margin: 18px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.login-hint-arrow {
+  flex: none;
+  color: var(--wine);
+}
+.login-seal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+  margin: 16px 0 0;
+}
+.login-seal svg {
+  flex: none;
+  color: var(--wine);
+}
+
+/* Cartão do Clerk vestido com os tokens do sistema.
+ * O Clerk expõe as próprias variáveis CSS; apontar cada uma para o token
+ * correspondente alinha o formulário sem combater classes internas. */
+.login-clerk {
+  --cl-colors-background: var(--paper);
+  --cl-colors-foreground: var(--ink);
+  --cl-colors-primary: var(--ink);
+  --cl-colors-primary-foreground: var(--on-ink);
+  --cl-colors-input-background: var(--paper);
+  --cl-colors-input-foreground: var(--ink);
+  --cl-colors-muted: var(--surface);
+  --cl-colors-muted-foreground: var(--ink-2);
+  --cl-colors-accent: var(--wine-tint);
+  --cl-colors-accent-foreground: var(--wine);
+  --cl-colors-border: var(--rule-strong);
+  --cl-colors-neutral: var(--ink-3);
+  --cl-fonts: var(--sans);
+  --cl-fonts-heading: var(--display);
+  --cl-border-radius: var(--r-2);
+}
+.login-clerk .cl-card {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-3);
+  box-shadow: none;
+}
+.login-clerk .cl-headerTitle {
+  font: 600 24px/1.2 var(--display);
+  color: var(--ink);
+}
+.login-clerk .cl-headerSubtitle {
+  color: var(--ink-2);
+  font-size: 14px;
+}
+.login-clerk .cl-formButtonPrimary {
+  background: var(--ink);
+  color: var(--on-ink);
+  font-weight: 600;
+  border-radius: var(--r-2);
+  box-shadow: none;
+}
+.login-clerk .cl-formButtonPrimary:hover {
+  background: var(--ink);
+  filter: brightness(1.15);
+}
+.login-clerk .cl-formButtonPrimary:focus-visible,
+.login-clerk .cl-formFieldInput:focus-visible {
+  outline: 2px solid var(--wine);
+  outline-offset: 2px;
+}
+.login-clerk .cl-formFieldInput {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+  font-size: 14px;
+}
+.login-clerk .cl-formFieldLabel {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.login-clerk .cl-formFieldErrorText,
+.login-clerk .cl-alertText {
+  color: var(--danger);
+  font-size: 13px;
+}
+.login-clerk .cl-socialButtonsBlockButton {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+  font-weight: 500;
+}
+.login-clerk .cl-socialButtonsBlockButton:hover {
+  background: var(--surface);
+}
+.login-clerk .cl-dividerText {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.login-clerk .cl-footerActionLink,
+.login-clerk .cl-footerActionText,
+.login-clerk .cl-internal-1phwivx {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.login-clerk .cl-footerActionLink {
+  color: var(--wine);
+  font-weight: 600;
+}
+.login-clerk .cl-footerActionLink:hover {
+  color: var(--wine-deep);
+}
+.login-clerk .cl-backLink,
+.login-clerk .cl-internal-b3xtnu {
+  color: var(--wine);
+  font-weight: 600;
+}
+
+/* Empilhamento em telas estreitas: marca vira cabeçalho compacto. */
+@media (max-width: 760px) {
+  .login-screen {
+    grid-template-columns: 1fr;
+  }
+  .login-panel {
+    padding: 32px 24px 24px;
+  }
+  .login-panel-inner {
+    max-width: none;
+  }
+  .login-panel-text {
+    margin-bottom: 20px;
+  }
+  .login-features,
+  .login-meter {
+    display: none;
+  }
+  .login-providers {
+    margin-bottom: 0;
+  }
+  .login-main {
+    padding: 32px 24px 48px;
+    align-items: start;
+  }
+  .login-eyebrow {
+    margin-top: 8px;
+  }
+}
+
+/* Botão de conta/logout no cabeçalho do chat. */
+.account-button { display: inline-flex; align-items: center; }
+.chat-header .cl-userButtonTrigger {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-2);
+}
+
+/* Chave do Clerk ausente em dev — instrução em vez de tela quebrada. */
+.config-missing {
+  max-width: 520px;
+  margin: 12vh auto 0;
+  padding: 0 20px;
+  color: var(--ink);
+}
+.config-missing-brand {
+  font: 700 15px/1.2 var(--display);
+  color: var(--wine);
+}
+.config-missing h1 { font: 600 30px/1.15 var(--display); margin: 8px 0 12px; }
+.config-missing p { color: var(--ink-2); }
+.config-missing code,
+.config-missing pre { font-family: var(--mono); }
+.config-missing pre {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+.config-missing-hint { font-size: 13px; color: var(--ink-3); }

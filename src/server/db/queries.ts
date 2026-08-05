@@ -24,8 +24,14 @@ import {
 const FALLBACK_SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT '',
   title TEXT,
   provider_id TEXT NOT NULL,
   model_id TEXT NOT NULL,
@@ -56,6 +62,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content='messages', content_rowid='rowid');
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
   INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
@@ -104,14 +111,16 @@ CREATE TRIGGER IF NOT EXISTS artifact_versions_au AFTER UPDATE OF content ON art
   INSERT INTO artifact_versions_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
 CREATE TABLE IF NOT EXISTS provider_settings (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
+  user_id TEXT NOT NULL DEFAULT '',
   label TEXT NOT NULL,
   base_url TEXT NOT NULL,
   models_json TEXT NOT NULL,
   verified_at TEXT,
   api_key_cipher TEXT,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, id)
 );
 `;
 
@@ -378,6 +387,11 @@ export class ChatDatabase {
       enableForeignKeyConstraints: true,
       timeout: 5_000,
     });
+    // Bancos criados antes do multiusuário: adiciona as colunas que faltam
+    // ANTES de executar o schema (CREATE TABLE IF NOT EXISTS não altera
+    // tabelas existentes, e o CREATE INDEX em user_id falharia sem a coluna).
+    this.ensureColumn('conversations', 'user_id', "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn('provider_settings', 'user_id', "TEXT NOT NULL DEFAULT ''");
     this.db.exec(loadSchemaSql());
     // Keep external-content FTS consistent with databases created before the triggers existed.
     this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');");
@@ -388,17 +402,36 @@ export class ChatDatabase {
     if (this.db.isOpen) this.db.close();
   }
 
-  createConversation(data: CreateConversationData): Conversation {
+  /** Adiciona uma coluna a uma tabela existente se ela ainda não existir. */
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const tableExists = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table);
+    if (!tableExists) return;
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((item) => item.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  ensureUser(userId: string): void {
+    const now = Date.now();
+    this.db.prepare('INSERT OR IGNORE INTO users (id, created_at, updated_at) VALUES (?, ?, ?)').run(userId, now, now);
+    this.db.prepare('UPDATE users SET updated_at = ? WHERE id = ?').run(now, userId);
+  }
+
+  createConversation(userId: string, data: CreateConversationData): Conversation {
     const now = data.createdAt ?? Date.now();
     const id = data.id ?? randomUUID();
     this.db
       .prepare(
         `INSERT INTO conversations
-          (id, title, provider_id, model_id, system_prompt, created_at, updated_at, archived)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+          (id, user_id, title, provider_id, model_id, system_prompt, created_at, updated_at, archived)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         id,
+        userId,
         data.title ?? null,
         data.providerId,
         data.modelId,
@@ -406,10 +439,10 @@ export class ChatDatabase {
         now,
         now,
       );
-    return this.getConversation(id) as Conversation;
+    return this.getConversation(userId, id) as Conversation;
   }
 
-  listConversations(options: { includeArchived?: boolean } = {}): ConversationSummary[] {
+  listConversations(userId: string, options: { includeArchived?: boolean } = {}): ConversationSummary[] {
     const includeArchived = options.includeArchived ?? false;
     const rows = this.db
       .prepare(
@@ -419,15 +452,15 @@ export class ChatDatabase {
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
            FROM conversations c
            LEFT JOIN messages m ON m.conversation_id = c.id
-          WHERE (? = 1 OR c.archived = 0)
+          WHERE c.user_id = ? AND (? = 1 OR c.archived = 0)
           GROUP BY c.id
           ORDER BY c.updated_at DESC, c.id DESC`,
       )
-      .all(includeArchived ? 1 : 0);
+      .all(userId, includeArchived ? 1 : 0);
     return rows.map((row) => rowToSummary(row));
   }
 
-  getConversation(id: string): Conversation | null {
+  getConversation(userId: string, id: string): Conversation | null {
     const summaryRow = this.db
       .prepare(
         `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt,
@@ -436,20 +469,20 @@ export class ChatDatabase {
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
            FROM conversations c
            LEFT JOIN messages m ON m.conversation_id = c.id
-          WHERE c.id = ?
+          WHERE c.id = ? AND c.user_id = ?
           GROUP BY c.id`,
       )
-      .get(id);
+      .get(id, userId);
     if (!summaryRow) return null;
     const summary = rowToSummary(summaryRow);
     return {
       ...summary,
-      messages: this.getMessages(id),
+      messages: this.getMessages(userId, id),
     };
   }
 
-  updateConversation(id: string, data: UpdateConversationData): Conversation | null {
-    const current = this.getConversation(id);
+  updateConversation(userId: string, id: string, data: UpdateConversationData): Conversation | null {
+    const current = this.getConversation(userId, id);
     if (!current) return null;
     const title = data.title === undefined ? current.title : data.title;
     const providerId = data.providerId ?? current.providerId;
@@ -460,32 +493,33 @@ export class ChatDatabase {
       .prepare(
         `UPDATE conversations
             SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, archived = ?, updated_at = ?
-          WHERE id = ?`,
+          WHERE id = ? AND user_id = ?`,
       )
-      .run(title, providerId, modelId, systemPrompt, archived ? 1 : 0, Date.now(), id);
-    return this.getConversation(id);
+      .run(title, providerId, modelId, systemPrompt, archived ? 1 : 0, Date.now(), id, userId);
+    return this.getConversation(userId, id);
   }
 
-  deleteConversation(id: string): boolean {
-    const result = this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+  deleteConversation(userId: string, id: string): boolean {
+    const result = this.db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?').run(id, userId);
     return asNumber(result.changes) > 0;
   }
 
-  getMessages(conversationId: string): Message[] {
+  getMessages(userId: string, conversationId: string): Message[] {
     const rows = this.db
       .prepare(
-        `SELECT id, conversation_id, role, content, reasoning, provider_id, model_id,
-                prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, total_tokens,
-                cost_usd, cost_estimated, finish_reason, error_code, created_at, latency_ms
-           FROM messages
-          WHERE conversation_id = ?
-          ORDER BY created_at ASC, rowid ASC`,
+        `SELECT m.id, m.conversation_id, m.role, m.content, m.reasoning, m.provider_id, m.model_id,
+                m.prompt_tokens, m.cached_tokens, m.completion_tokens, m.reasoning_tokens, m.total_tokens,
+                m.cost_usd, m.cost_estimated, m.finish_reason, m.error_code, m.created_at, m.latency_ms
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id AND c.user_id = ?
+          WHERE m.conversation_id = ?
+          ORDER BY m.created_at ASC, m.rowid ASC`,
       )
-      .all(conversationId);
+      .all(userId, conversationId);
     return rows.map((row) => rowToMessage(row));
   }
 
-  insertMessage(data: CreateMessageData): Message {
+  insertMessage(userId: string, data: CreateMessageData): Message {
     const id = data.id ?? randomUUID();
     const createdAt = data.createdAt ?? Date.now();
     const usage = data.usage;
@@ -524,8 +558,14 @@ export class ChatDatabase {
     return rowToMessage(row);
   }
 
-  updateMessage(id: string, data: UpdateMessageData): Message | null {
-    const currentRow = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id);
+  updateMessage(userId: string, id: string, data: UpdateMessageData): Message | null {
+    // Defesa em profundidade: a mensagem só existe para o dono da conversa.
+    const currentRow = this.db
+      .prepare(
+        `SELECT m.* FROM messages m
+          WHERE m.id = ? AND m.conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)`,
+      )
+      .get(id, userId);
     if (!currentRow) return null;
     const current = rowToMessage(currentRow);
     const usage = data.usage === undefined ? current.usage : data.usage;
@@ -541,7 +581,7 @@ export class ChatDatabase {
             SET content = ?, reasoning = ?, prompt_tokens = ?, cached_tokens = ?,
                 completion_tokens = ?, reasoning_tokens = ?, total_tokens = ?,
                 cost_usd = ?, cost_estimated = ?, finish_reason = ?, error_code = ?, latency_ms = ?
-          WHERE id = ?`,
+          WHERE id = ? AND conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)`,
       )
       .run(
         content,
@@ -557,13 +597,19 @@ export class ChatDatabase {
         errorCode,
         latencyMs,
         id,
+        userId,
       );
     this.touchConversation(current.conversationId, Date.now());
-    const row = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id);
+    const row = this.db
+      .prepare(
+        `SELECT m.* FROM messages m
+          WHERE m.id = ? AND m.conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)`,
+      )
+      .get(id, userId);
     return row ? rowToMessage(row) : null;
   }
 
-  upsertArtifact(data: UpsertArtifactData): Artifact {
+  upsertArtifact(userId: string, data: UpsertArtifactData): Artifact {
     const now = data.createdAt ?? Date.now();
     const existing = this.db
       .prepare('SELECT * FROM artifacts WHERE conversation_id = ? AND slug = ?')
@@ -605,8 +651,8 @@ export class ChatDatabase {
     };
   }
 
-  insertArtifactVersion(data: InsertArtifactVersionData): ArtifactVersion {
-    const artifact = this.upsertArtifact(data);
+  insertArtifactVersion(userId: string, data: InsertArtifactVersionData): ArtifactVersion {
+    const artifact = this.upsertArtifact(userId, data);
     const version = data.version ?? artifact.currentVersion + 1;
     const createdAt = data.createdAt ?? Date.now();
     this.db
@@ -636,14 +682,15 @@ export class ChatDatabase {
     return rowToArtifactVersion(row);
   }
 
-  getArtifacts(conversationId: string): Artifact[] {
+  getArtifacts(userId: string, conversationId: string): Artifact[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM artifacts
-          WHERE conversation_id = ? AND current_version > 0
-          ORDER BY updated_at DESC, id DESC`,
+        `SELECT a.* FROM artifacts a
+          JOIN conversations c ON c.id = a.conversation_id AND c.user_id = ?
+          WHERE a.conversation_id = ? AND a.current_version > 0
+          ORDER BY a.updated_at DESC, a.id DESC`,
       )
-      .all(conversationId);
+      .all(userId, conversationId);
     return rows.flatMap((row) => {
       const kind = artifactKind(row.kind);
       if (!kind) return [];
@@ -666,19 +713,21 @@ export class ChatDatabase {
     });
   }
 
-  getArtifactVersion(conversationId: string, slug: string, version: number): ArtifactVersion | null {
+  getArtifactVersion(userId: string, conversationId: string, slug: string, version: number): ArtifactVersion | null {
     const row = this.db
       .prepare(
         `SELECT av.*
            FROM artifact_versions av
            JOIN artifacts a ON a.id = av.artifact_id
+           JOIN conversations c ON c.id = a.conversation_id AND c.user_id = ?
           WHERE a.conversation_id = ? AND a.slug = ? AND av.version = ?`,
       )
-      .get(conversationId, slug, version);
+      .get(userId, conversationId, slug, version);
     return row ? rowToArtifactVersion(row) : null;
   }
 
   updateArtifactVersionCost(
+    userId: string,
     conversationId: string,
     slug: string,
     version: number,
@@ -689,18 +738,21 @@ export class ChatDatabase {
       .prepare(
         `UPDATE artifact_versions
             SET output_tokens = ?, cost_usd = ?
-          WHERE artifact_id = (
-            SELECT id FROM artifacts WHERE conversation_id = ? AND slug = ?
-          ) AND version = ?`,
+          WHERE version = ?
+            AND artifact_id IN (
+              SELECT a.id FROM artifacts a
+              JOIN conversations c ON c.id = a.conversation_id AND c.user_id = ?
+              WHERE a.conversation_id = ? AND a.slug = ?
+            )`,
       )
-      .run(outputTokens, costUsd, conversationId, slug, version);
+      .run(outputTokens, costUsd, version, userId, conversationId, slug);
     return asNumber(result.changes) > 0;
   }
 
-  listProviderSettings(): ProviderSettingsRecord[] {
+  listProviderSettings(userId: string): ProviderSettingsRecord[] {
     return this.db
-      .prepare('SELECT * FROM provider_settings ORDER BY label ASC, id ASC')
-      .all()
+      .prepare('SELECT * FROM provider_settings WHERE user_id = ? ORDER BY label ASC, id ASC')
+      .all(userId)
       .flatMap((row) => {
         let models: unknown;
         try {
@@ -722,9 +774,9 @@ export class ChatDatabase {
       });
   }
 
-  upsertProviderSettings(data: UpsertProviderSettingsData): ProviderSettingsRecord {
+  upsertProviderSettings(userId: string, data: UpsertProviderSettingsData): ProviderSettingsRecord {
     const now = Date.now();
-    const existing = this.db.prepare('SELECT * FROM provider_settings WHERE id = ?').get(data.id);
+    const existing = this.db.prepare('SELECT * FROM provider_settings WHERE id = ? AND user_id = ?').get(data.id, userId);
     // `undefined` mantém a chave atual; `null` apaga; string grava a nova.
     const cipher = data.apiKeyCipher === undefined
       ? (existing ? asNullableString(existing.api_key_cipher) : null)
@@ -732,18 +784,19 @@ export class ChatDatabase {
 
     this.db
       .prepare(
-        `INSERT INTO provider_settings (id, label, base_url, models_json, verified_at, api_key_cipher, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           label = excluded.label,
-           base_url = excluded.base_url,
-           models_json = excluded.models_json,
-           verified_at = excluded.verified_at,
-           api_key_cipher = excluded.api_key_cipher,
-           updated_at = excluded.updated_at`,
+        `INSERT INTO provider_settings (id, user_id, label, base_url, models_json, verified_at, api_key_cipher, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, id) DO UPDATE SET
+          label = excluded.label,
+          base_url = excluded.base_url,
+          models_json = excluded.models_json,
+          verified_at = excluded.verified_at,
+          api_key_cipher = excluded.api_key_cipher,
+          updated_at = excluded.updated_at`,
       )
       .run(
         data.id,
+        userId,
         data.label,
         data.baseURL,
         JSON.stringify(data.models),
@@ -753,16 +806,16 @@ export class ChatDatabase {
         now,
       );
 
-    const record = this.listProviderSettings().find((item) => item.id === data.id);
+    const record = this.listProviderSettings(userId).find((item) => item.id === data.id);
     if (!record) throw new Error('Provedor não encontrado após gravação.');
     return record;
   }
 
-  deleteProviderSettings(id: string): boolean {
-    return this.db.prepare('DELETE FROM provider_settings WHERE id = ?').run(id).changes > 0;
+  deleteProviderSettings(userId: string, id: string): boolean {
+    return this.db.prepare('DELETE FROM provider_settings WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
   }
 
-  searchConversations(query: string): ConversationSummary[] {
+  searchConversations(userId: string, query: string): ConversationSummary[] {
     const ftsQuery = escapeFtsQuery(query);
     const rows = this.db
       .prepare(
@@ -782,17 +835,18 @@ export class ChatDatabase {
                JOIN artifacts a ON a.id = av.artifact_id AND av.version = a.current_version
               WHERE f.artifact_versions_fts MATCH ?
            ) matched_conversations
-           JOIN conversations c ON c.id = matched_conversations.conversation_id
+           JOIN conversations c ON c.id = matched_conversations.conversation_id AND c.user_id = ?
            LEFT JOIN messages m ON m.conversation_id = c.id
           GROUP BY c.id
           ORDER BY c.updated_at DESC, c.id DESC`,
       )
-      .all(ftsQuery, ftsQuery);
+      .all(ftsQuery, ftsQuery, userId);
     return rows.map((row) => rowToSummary(row));
   }
 
-  getCostAnalytics(days = 30): CostAnalyticsResponse {
+  getCostAnalytics(userId: string, days = 30): CostAnalyticsResponse {
     const limit = Math.min(365, Math.max(1, Math.trunc(days)));
+    const since = Date.now() - limit * 24 * 60 * 60 * 1_000;
     const dailyRows = this.db
       .prepare(
         `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch') AS day,
@@ -802,10 +856,11 @@ export class ChatDatabase {
           WHERE role = 'assistant'
             AND cost_usd IS NOT NULL
             AND created_at >= ?
+            AND conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)
           GROUP BY day
           ORDER BY day DESC`,
       )
-      .all(Date.now() - limit * 24 * 60 * 60 * 1_000);
+      .all(since, userId);
     const modelRows = this.db
       .prepare(
         `SELECT provider_id, model_id,
@@ -817,17 +872,19 @@ export class ChatDatabase {
             AND provider_id IS NOT NULL
             AND model_id IS NOT NULL
             AND created_at >= ?
+            AND conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)
           GROUP BY provider_id, model_id
           ORDER BY cost_usd DESC, model_id ASC`,
       )
-      .all(Date.now() - limit * 24 * 60 * 60 * 1_000);
+      .all(since, userId);
     const totalRow = this.db
       .prepare(
         `SELECT COALESCE(SUM(cost_usd), 0) AS total_cost_usd
            FROM messages
-          WHERE role = 'assistant' AND cost_usd IS NOT NULL AND created_at >= ?`,
+          WHERE role = 'assistant' AND cost_usd IS NOT NULL AND created_at >= ?
+            AND conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)`,
       )
-      .get(Date.now() - limit * 24 * 60 * 60 * 1_000);
+      .get(since, userId);
 
     return {
       totalCostUsd: Math.max(0, asNumber(totalRow?.total_cost_usd)),

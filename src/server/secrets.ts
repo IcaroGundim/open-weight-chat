@@ -12,7 +12,8 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEq
  * uma chave-mestra própria, mas não é mais necessário para cadastrar nada.
  */
 
-const VERSION = 'v1';
+const V1 = 'v1';
+const V2 = 'v2';
 const KEY_LENGTH = 32;
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
@@ -27,6 +28,25 @@ interface MasterSecretResult {
 export interface SecretStorageStatus {
   readonly available: boolean;
   readonly reason: string | null;
+}
+
+/**
+ * Contexto autenticado do dono do segredo (formato v2).
+ *
+ * O v2 amarra o segredo ao par usuário/provedor via AAD (additional
+ * authenticated data) do AES-256-GCM: só quem conhece exatamente o mesmo
+ * `userId` e `providerId` consegue decifrar. Sem contexto (chamadas legadas),
+ * o AAD é vazio — o blob continua válido, apenas não fica amarrado a um dono.
+ */
+export interface SecretContext {
+  userId: string;
+  providerId: string;
+}
+
+/** AAD do AES-GCM: `userId:providerId` em UTF-8; vazio quando não há contexto. */
+function contextAad(context: SecretContext | undefined): Buffer {
+  if (!context) return Buffer.alloc(0);
+  return Buffer.from(`${context.userId}:${context.providerId}`, 'utf8');
 }
 
 let generatedSecret: { path: string; value: string } | null = null;
@@ -116,36 +136,64 @@ function deriveKey(master: string, salt: Buffer): Buffer {
   return scryptSync(master, salt, KEY_LENGTH);
 }
 
-export function encryptSecret(plain: string): string {
+export function encryptSecret(plain: string, context?: SecretContext): string {
   const result = masterSecret();
   if (!result.value) throw new Error(result.reason ?? 'Armazenamento de segredos indisponível.');
 
   const salt = randomBytes(SALT_LENGTH);
   const iv = randomBytes(IV_LENGTH);
   const cipher = createCipheriv('aes-256-gcm', deriveKey(result.value, salt), iv);
+  // v2: o contexto do dono entra como AAD antes de qualquer update/final.
+  cipher.setAAD(contextAad(context));
   const ciphertext = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return [VERSION, salt, iv, tag, ciphertext].map((part) => (typeof part === 'string' ? part : part.toString('base64'))).join('.');
+  return [V2, salt, iv, tag, ciphertext].map((part) => (typeof part === 'string' ? part : part.toString('base64'))).join('.');
 }
 
-export function decryptSecret(blob: string | null | undefined): string | null {
+export function decryptSecret(blob: string | null | undefined, context?: SecretContext): string | null {
   if (!blob) return null;
   const result = masterSecret();
   if (!result.value) return null;
 
   const parts = blob.split('.');
-  if (parts.length !== 5 || parts[0] !== VERSION) return null;
+  if (parts.length !== 5 || (parts[0] !== V1 && parts[0] !== V2)) return null;
   try {
     const [, saltB64, ivB64, tagB64, ctB64] = parts;
     const decipher = createDecipheriv('aes-256-gcm', deriveKey(result.value, Buffer.from(saltB64, 'base64')), Buffer.from(ivB64, 'base64'));
+    if (parts[0] === V2) {
+      // AAD antes do setAuthTag/final; contexto errado (ou ausente quando o
+      // blob foi amarrado a um dono) faz o GCM falhar e o catch devolve null.
+      decipher.setAAD(contextAad(context));
+    }
     decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
     const plain = Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64')), decipher.final()]);
     return plain.toString('utf8');
   } catch {
-    // Chave-mestra trocada, registro corrompido ou tag inválida: trate como
-    // ausência de chave. Nunca lance daqui — derrubaria o catálogo inteiro.
+    // Chave-mestra trocada, registro corrompido, tag inválida ou AAD que não
+    // bate: trate como ausência de chave. Nunca lance daqui — derrubaria o
+    // catálogo inteiro. Blobs v1 ignoram o contexto (não têm AAD).
     return null;
   }
+}
+
+/** True quando o blob usa o formato v2 (com AAD do dono). Usado pela migração. */
+export function isV2Blob(blob: string): boolean {
+  return blob.startsWith(`${V2}.`);
+}
+
+/**
+ * Recifra um blob trocando o contexto do dono (ex.: migração v1 → v2 ou
+ * transferência entre usuários). Decifra com `fromContext` e recifra com
+ * `toContext`. Se o blob não puder ser decifrado (v2 com contexto errado,
+ * corrompido, chave trocada), LANÇA — a migração deve abortar, nunca
+ * prosseguir com um segredo que não conseguiu ler.
+ */
+export function reencryptSecret(blob: string, fromContext: SecretContext, toContext: SecretContext): string {
+  const plain = decryptSecret(blob, fromContext);
+  if (plain === null) {
+    throw new Error('Não foi possível decifrar a chave antiga com o contexto de origem; a migração foi abortada.');
+  }
+  return encryptSecret(plain, toContext);
 }
 
 /** Comparação em tempo constante, para telas que confirmam um segredo. */

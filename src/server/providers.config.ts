@@ -34,8 +34,15 @@ const unknownPricing: ModelPricing = {
 };
 
 /**
- * The only server-side source of truth for provider endpoints, models and prices.
- * API keys are intentionally represented only by environment variable names.
+ * Catálogo estático de provedores embutidos: endpoints, modelos e preços.
+ *
+ * Este módulo NÃO contém chaves nem dados de usuário: `apiKeyEnv` guarda
+ * apenas o NOME da variável de ambiente (e mesmo essa fonte só é consultada
+ * em dev/teste com opt-in — ver `allowEnvApiKeys` em provider-resolution.ts).
+ * A resolução por usuário, dentro da requisição, vive em
+ * `src/server/provider-resolution.ts`; o catálogo global mutável
+ * (`setRuntimeProviders`) foi removido justamente para eliminar o vazamento
+ * de chave entre requisições simultâneas de usuários diferentes.
  */
 export const PROVIDERS = {
   deepseek: {
@@ -205,49 +212,40 @@ export const PROVIDERS = {
 
 const STALE_AFTER_DAYS = 90;
 
-function isConfigured(provider: ProviderConfig): boolean {
-  if (!provider.requiresApiKey) return true;
-  return Boolean(getProviderApiKey(provider));
-}
-
-function isStale(verifiedAt: string, now = new Date()): boolean {
+/** True quando o catálogo do provedor passou da idade de re-verificação. */
+export function isStale(verifiedAt: string, now = new Date()): boolean {
   const verified = Date.parse(`${verifiedAt}T00:00:00.000Z`);
   if (!Number.isFinite(verified)) return true;
   const age = now.getTime() - verified;
   return age > STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
 }
 
-interface MergedProviders {
+/**
+ * Configurado no catálogo ESTÁTICO (legado): sem acesso ao usuário, a única
+ * fonte possível de chave é a variável de ambiente nomeada por `apiKeyEnv`.
+ * É apenas um booleano — a chave em si nunca entra neste módulo.
+ */
+function isConfigured(provider: ProviderConfig): boolean {
+  if (!provider.requiresApiKey) return true;
+  return Boolean(provider.apiKeyEnv && process.env[provider.apiKeyEnv]);
+}
+
+interface StaticCatalog {
   readonly byId: ReadonlyMap<string, ProviderConfig>;
   readonly customIds: ReadonlySet<string>;
   readonly errors: readonly string[];
 }
 
-/** Provedor vindo do banco, com a chave já decifrada — só em memória. */
-export interface RuntimeProvider {
-  readonly config: ProviderConfig;
-  readonly apiKey: string | null;
-}
-
-let runtimeProviders: readonly RuntimeProvider[] = [];
-
 /**
- * Substitui os provedores cadastrados pela interface. Chamado pelo servidor a
- * partir do banco, na criação do app e depois de cada gravação.
+ * Visão estática única sobre embutidos + provedores do arquivo/env custom.
+ * É memoizada, mas NUNCA contém chaves nem dados de usuário: qualquer coisa
+ * por usuário passa por `resolveProvider`/`resolveModelsCatalog` em
+ * provider-resolution.ts.
  */
-export function setRuntimeProviders(list: readonly RuntimeProvider[]): void {
-  runtimeProviders = list;
-  mergedCache = null;
-}
+let staticCache: StaticCatalog | null = null;
 
-let mergedCache: MergedProviders | null = null;
-
-/**
- * Visão única sobre embutidos + personalizados. Todo acesso a provedor passa
- * por aqui; ninguém deve ler PROVIDERS diretamente fora deste módulo.
- */
-function getMergedProviders(): MergedProviders {
-  if (mergedCache) return mergedCache;
+function getStaticCatalog(): StaticCatalog {
+  if (staticCache) return staticCache;
   const custom = getCustomProviders();
   const byId = new Map<string, ProviderConfig>();
   for (const provider of Object.values(PROVIDERS)) byId.set(provider.id, provider);
@@ -256,52 +254,44 @@ function getMergedProviders(): MergedProviders {
     byId.set(provider.id, provider);
     customIds.add(provider.id);
   }
-  // Cadastro pela interface tem a última palavra sobre arquivo, variável de
-  // ambiente e também sobre o catálogo embutido. Isso permite configurar pela
-  // web um provedor que já vem no aplicativo, como o OpenRouter, sem duplicá-lo.
-  for (const { config } of runtimeProviders) {
-    byId.set(config.id, config);
-    if (!Object.prototype.hasOwnProperty.call(PROVIDERS, config.id)) customIds.add(config.id);
-  }
-  mergedCache = { byId, customIds, errors: custom.errors };
-  return mergedCache;
+  staticCache = { byId, customIds, errors: custom.errors };
+  return staticCache;
 }
 
-/** Apenas para testes: relê o ambiente na próxima chamada. */
+/** Apenas para testes: relê arquivo/env de provedores custom na próxima chamada. */
 export function resetProvidersCache(): void {
-  mergedCache = null;
-  runtimeProviders = [];
+  staticCache = null;
   resetCustomProvidersCache();
 }
 
+/**
+ * Lista estática de provedores (embutidos + arquivo custom), na ordem do
+ * catálogo. Usada pela resolução por usuário como base; não contém chaves.
+ */
+export function listStaticProviders(): readonly ProviderConfig[] {
+  return [...getStaticCatalog().byId.values()];
+}
+
 export function getProvider(providerId: string): ProviderConfig | undefined {
-  return getMergedProviders().byId.get(providerId);
+  return getStaticCatalog().byId.get(providerId);
 }
 
 /** Erros de configuração de provedores personalizados, para exibição. */
 export function getProviderConfigErrors(): readonly string[] {
-  return getMergedProviders().errors;
+  return getStaticCatalog().errors;
 }
 
 export function getModel(providerId: string, modelId: string): ProviderModelConfig | undefined {
   return getProvider(providerId)?.models.find((model) => model.id === modelId);
 }
 
-export function getProviderBaseURL(provider: ProviderConfig): string {
-  if (provider.baseURLEnv && process.env[provider.baseURLEnv]) {
-    return process.env[provider.baseURLEnv] as string;
-  }
-  return provider.baseURL;
-}
-
-export function getProviderApiKey(provider: ProviderConfig): string | undefined {
-  // Chave cadastrada pela interface tem precedência sobre a variável de
-  // ambiente: foi a mais recente decisão explícita do usuário.
-  const runtime = runtimeProviders.find((item) => item.config.id === provider.id);
-  if (runtime?.apiKey) return runtime.apiKey;
-  return provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined;
-}
-
+/**
+ * LEGADO (catálogo estático, SEM usuário): usado apenas pelo index.ts antigo
+ * (reescrito na Onda 4) e por testes antigos. `configured` considera apenas a
+ * presença da variável de ambiente de `apiKeyEnv` — no fluxo novo, use
+ * `resolveModelsCatalog(userId, db)` (provider-resolution.ts), que decide a
+ * configuração pela chave do usuário autenticado.
+ */
 export function getDefaultModelSelection(): { providerId: ProviderId; modelId: string } {
   const envProvider = process.env.DEFAULT_PROVIDER_ID;
   const envModel = process.env.DEFAULT_MODEL_ID;
@@ -315,8 +305,14 @@ export function getDefaultModelSelection(): { providerId: ProviderId; modelId: s
   return { providerId: firstProvider.id, modelId: firstProvider.models[0].id };
 }
 
+/**
+ * LEGADO (catálogo estático, SEM usuário): usado apenas pelo index.ts antigo
+ * e por testes antigos. A resposta nunca contém chaves — apenas o booleano
+ * `configured` derivado de variável de ambiente. Para o catálogo por usuário,
+ * use `resolveModelsCatalog(userId, db)`.
+ */
 export function getModelsCatalog(now = new Date()): ModelsResponse {
-  const merged = getMergedProviders();
+  const merged = getStaticCatalog();
   const providers = [...merged.byId.values()].map<ProviderCatalog>((provider) => ({
     id: provider.id,
     label: provider.label,

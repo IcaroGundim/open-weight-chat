@@ -11,6 +11,7 @@ import {
   renameConversation as renameConversationRequest,
   streamChat,
 } from '../api';
+import { getUserId } from '../token-provider';
 import type {
   Artifact,
   ArtifactEndEnvelope,
@@ -23,6 +24,21 @@ import type {
 } from '../types';
 
 const SELECTED_MODEL_STORAGE_KEY = 'open-weight-chat.selected-model';
+let sessionEpoch = 0;
+
+function isCurrentSession(epoch: number): boolean {
+  return epoch === sessionEpoch;
+}
+
+/**
+ * Chave de preferência do modelo no localStorage, particionada por usuário
+ * (multiusuário com Clerk). Sem usuário logado, usa a chave sem sufixo como
+ * fallback para não quebrar ambientes sem autenticação.
+ */
+function selectedModelStorageKey(): string {
+  const userId = getUserId();
+  return userId ? `${SELECTED_MODEL_STORAGE_KEY}.${userId}` : SELECTED_MODEL_STORAGE_KEY;
+}
 
 function makeId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -33,7 +49,7 @@ function makeId(prefix: string): string {
 
 function initialSelectedModelId(): string | null {
   if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(SELECTED_MODEL_STORAGE_KEY);
+  return window.localStorage.getItem(selectedModelStorageKey());
 }
 
 function errorMessage(error: unknown): string {
@@ -136,6 +152,7 @@ interface ChatState {
   sendMessage: (content: string) => Promise<void>;
   stopStreaming: () => void;
   clearError: () => void;
+  resetState: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -159,19 +176,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
 
   loadModels: async () => {
+    const epoch = sessionEpoch;
     set({ isLoadingModels: true, error: null });
     try {
       const { models, configErrors } = await getModels();
+      if (!isCurrentSession(epoch)) return;
       const current = get().selectedModelId;
       const configuredModels = models.filter((model) => model.configured !== false);
       const selectedModelId = models.some((model) => model.id === current && model.configured !== false)
         ? current
         : (configuredModels[0] ?? models[0])?.id ?? null;
       if (typeof window !== 'undefined') {
+        const storageKey = selectedModelStorageKey();
         if (selectedModelId) {
-          window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, selectedModelId);
+          window.localStorage.setItem(storageKey, selectedModelId);
         } else {
-          window.localStorage.removeItem(SELECTED_MODEL_STORAGE_KEY);
+          window.localStorage.removeItem(storageKey);
         }
       }
       // Provedor personalizado mal configurado nunca falha em silêncio: o
@@ -181,14 +201,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : null;
       set({ models, selectedModelId, isLoadingModels: false, error: configError });
     } catch (error) {
+      if (!isCurrentSession(epoch)) return;
       set({ models: [], isLoadingModels: false, error: errorMessage(error) });
     }
   },
 
   loadConversations: async () => {
+    const epoch = sessionEpoch;
     set({ isLoadingConversations: true, error: null });
     try {
       const conversations = await getConversations();
+      if (!isCurrentSession(epoch)) return;
       set((state) => {
         const active = state.activeConversationId;
         const activeConversationId = active && conversations.some((conversation) => conversation.id === active)
@@ -197,13 +220,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { conversations, activeConversationId, isLoadingConversations: false };
       });
     } catch (error) {
+      if (!isCurrentSession(epoch)) return;
       set({ isLoadingConversations: false, error: errorMessage(error) });
     }
   },
 
   loadArtifacts: async (conversationId) => {
+    const epoch = sessionEpoch;
     try {
       const artifacts = await getArtifacts(conversationId);
+      if (!isCurrentSession(epoch)) return;
       set((state) => ({
         artifactsByConversation: {
           ...state.artifactsByConversation,
@@ -214,6 +240,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
       }));
     } catch {
+      if (!isCurrentSession(epoch)) return;
       // Artefatos são uma extensão opcional da API. Conversas antigas continuam utilizáveis.
       set((state) => ({
         artifactsByConversation: {
@@ -225,6 +252,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (id) => {
+    const epoch = sessionEpoch;
     if (!id) {
       set({ activeConversationId: null, error: null });
       return;
@@ -235,6 +263,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ loadingConversationId: id });
     try {
       const result = await getConversation(id);
+      if (!isCurrentSession(epoch)) return;
       set((state) => ({
         messagesByConversation: { ...state.messagesByConversation, [id]: result.messages },
         messagesLoaded: { ...state.messagesLoaded, [id]: true },
@@ -245,6 +274,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
       void get().loadArtifacts(id);
     } catch (error) {
+      if (!isCurrentSession(epoch)) return;
       set((state) => ({ loadingConversationId: state.loadingConversationId === id ? null : state.loadingConversationId, error: errorMessage(error) }));
     }
   },
@@ -252,6 +282,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, error: null }),
 
   createConversation: async (title = 'Nova conversa') => {
+    const epoch = sessionEpoch;
     const selected = get().models.find((model) => model.id === get().selectedModelId);
     try {
       const conversation = await createConversationRequest({
@@ -259,6 +290,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         providerId: selected?.providerId,
         modelId: selected?.id,
       });
+      if (!isCurrentSession(epoch)) return null;
       set((state) => ({
         conversations: [conversation, ...state.conversations.filter((item) => item.id !== conversation.id)],
         activeConversationId: conversation.id,
@@ -268,16 +300,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
       return conversation;
     } catch (error) {
+      if (!isCurrentSession(epoch)) return null;
       set({ error: errorMessage(error) });
       return null;
     }
   },
 
   renameConversation: async (id, title) => {
+    const epoch = sessionEpoch;
     const normalizedTitle = title.trim();
     if (!normalizedTitle) return;
     try {
       const updated = await renameConversationRequest(id, normalizedTitle);
+      if (!isCurrentSession(epoch)) return;
       set((state) => ({
         conversations: state.conversations.map((conversation) => conversation.id === id
           ? { ...conversation, title: updated?.title ?? normalizedTitle }
@@ -285,13 +320,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         error: null,
       }));
     } catch (error) {
+      if (!isCurrentSession(epoch)) return;
       set({ error: errorMessage(error) });
     }
   },
 
   deleteConversation: async (id) => {
+    const epoch = sessionEpoch;
     try {
       await deleteConversationRequest(id);
+      if (!isCurrentSession(epoch)) return;
       set((state) => {
         const conversations = state.conversations.filter((conversation) => conversation.id !== id);
         const { [id]: _messages, ...messagesByConversation } = state.messagesByConversation;
@@ -308,13 +346,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         };
       });
     } catch (error) {
+      if (!isCurrentSession(epoch)) return;
       set({ error: errorMessage(error) });
     }
   },
 
   setSelectedModel: (id) => {
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, id);
+      window.localStorage.setItem(selectedModelStorageKey(), id);
     }
     set({ selectedModelId: id });
   },
@@ -324,6 +363,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   closeArtifact: () => set({ openArtifactSelection: null }),
 
   selectArtifactVersion: async (slug, version) => {
+    const epoch = sessionEpoch;
     const conversationId = get().activeConversationId;
     if (!conversationId) return;
     set({ openArtifactSelection: { slug, version } });
@@ -331,6 +371,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (artifactVersion(artifact, version)) return;
     try {
       const remoteVersion = await getArtifactVersion(conversationId, slug, version);
+      if (!isCurrentSession(epoch)) return;
       if (!remoteVersion) return;
       set((state) => ({
         artifactsByConversation: {
@@ -399,6 +440,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content) => {
+    const epoch = sessionEpoch;
     const trimmed = content.trim();
     if (!trimmed || get().isStreaming) return;
 
@@ -415,7 +457,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     let conversationId = get().activeConversationId;
     if (!conversationId || !get().conversations.some((conversation) => conversation.id === conversationId)) {
       const created = await get().createConversation(trimmed.slice(0, 56));
-      if (!created) return;
+      if (!created || !isCurrentSession(epoch)) return;
       conversationId = created.id;
     }
 
@@ -460,6 +502,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
 
     const updateAssistant = (update: (message: ChatMessage) => ChatMessage) => {
+      if (!isCurrentSession(epoch)) return;
       set((state) => {
         if (state.streamingMessageId !== assistantMessage.id) return state;
         const messages = state.messagesByConversation[conversationId as string] ?? [];
@@ -484,6 +527,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           onText: (text) => updateAssistant((message) => ({ ...message, content: message.content + text })),
           onReasoning: (reasoning) => updateAssistant((message) => ({ ...message, reasoning: `${message.reasoning ?? ''}${reasoning}` })),
           onArtifactStart: (artifact: ArtifactStartEnvelope) => {
+            if (!isCurrentSession(epoch)) return;
             const now = Date.now();
             const previous = (get().artifactsByConversation[conversationId] ?? []).find((item) => item.slug === artifact.slug);
             const pendingVersion = {
@@ -526,12 +570,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }));
           },
           onArtifactDelta: ({ slug, text }) => {
+            if (!isCurrentSession(epoch)) return;
             const key = streamingArtifactKey(conversationId, slug);
             set((state) => ({
               streamingArtifacts: { ...state.streamingArtifacts, [key]: (state.streamingArtifacts[key] ?? '') + text },
             }));
           },
           onArtifactEnd: (artifact) => {
+            if (!isCurrentSession(epoch)) return;
             const key = streamingArtifactKey(conversationId, artifact.slug);
             set((state) => {
               const body = state.streamingArtifacts[key] ?? '';
@@ -552,6 +598,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               };
             });
             void getArtifactVersion(conversationId, artifact.slug, artifact.version).then((remoteVersion) => {
+              if (!isCurrentSession(epoch)) return;
               if (!remoteVersion) return;
               set((state) => ({
                 artifactsByConversation: {
@@ -578,6 +625,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             costEstimated: usage.costEstimated ?? message.costEstimated,
           })),
           onError: (streamError) => {
+            if (!isCurrentSession(epoch)) return;
             const message = streamError.message || 'O provedor encerrou a resposta com erro.';
             updateAssistant((current) => ({
               ...current,
@@ -588,6 +636,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             set({ error: message });
           },
           onDone: (envelope) => {
+            if (!isCurrentSession(epoch)) return;
             const finishReason = envelope.finish_reason
               ?? (typeof envelope.finishReason === 'string' ? envelope.finishReason : undefined)
               ?? 'stop';
@@ -608,6 +657,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         controller.signal,
       );
     } catch (error) {
+      if (!isCurrentSession(epoch)) return;
       const aborted = controller.signal.aborted || get().streamAbortRequested;
       if (aborted) {
         updateAssistant((message) => message.status === 'streaming' ? { ...message, status: 'aborted', finishReason: 'aborted' } : message);
@@ -617,6 +667,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ error: message });
       }
     } finally {
+      if (!isCurrentSession(epoch)) return;
       const ownsStream = get().streamController === controller || get().streamingMessageId === assistantMessage.id;
       set((state) => {
         const prefix = `${conversationId}:`;
@@ -635,6 +686,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : { streamingArtifacts };
       });
       setTimeout(() => {
+        if (!isCurrentSession(epoch)) return;
         const current = get();
         if (!current.isStreaming || current.streamingConversationId !== conversationId) void current.loadArtifacts(conversationId);
       }, 200);
@@ -665,6 +717,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  /**
+   * Volta ao estado de fábrica. Chamado quando o usuário troca (signOut ou
+   * troca de conta no Clerk) para que conversas, artefatos e o modelo do
+   * usuário anterior nunca vazem para o próximo.
+   */
+  resetState: () => {
+    sessionEpoch += 1;
+    get().streamController?.abort();
+    set({
+      conversations: [],
+      messagesByConversation: {},
+      messagesLoaded: {},
+      activeConversationId: null,
+      models: [],
+      selectedModelId: initialSelectedModelId(),
+      artifactsByConversation: {},
+      streamingArtifacts: {},
+      openArtifactSelection: null,
+      isLoadingModels: false,
+      isLoadingConversations: false,
+      loadingConversationId: null,
+      isStreaming: false,
+      streamingConversationId: null,
+      streamingMessageId: null,
+      streamController: null,
+      streamAbortRequested: false,
+      error: null,
+    });
+  },
 }));
 
 export function getConversationCost(messages: ChatMessage[], conversation?: Conversation): number {

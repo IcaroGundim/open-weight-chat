@@ -31,12 +31,16 @@ import type {
 type Row = Record<string, unknown>;
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id text PRIMARY KEY, created_at bigint NOT NULL, updated_at bigint NOT NULL
+);
 CREATE TABLE IF NOT EXISTS conversations (
-  id text PRIMARY KEY, title text, provider_id text NOT NULL, model_id text NOT NULL,
+  id text PRIMARY KEY, user_id text NOT NULL DEFAULT '', title text, provider_id text NOT NULL, model_id text NOT NULL,
   system_prompt text, created_at bigint NOT NULL, updated_at bigint NOT NULL,
   archived boolean NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);
 CREATE TABLE IF NOT EXISTS messages (
   id text PRIMARY KEY, conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('system','user','assistant')), content text NOT NULL DEFAULT '',
@@ -61,8 +65,9 @@ CREATE TABLE IF NOT EXISTS artifact_versions (
   PRIMARY KEY (artifact_id, version)
 );
 CREATE TABLE IF NOT EXISTS provider_settings (
-  id text PRIMARY KEY, label text NOT NULL, base_url text NOT NULL, models_json jsonb NOT NULL DEFAULT '[]'::jsonb,
-  verified_at text, api_key_cipher text, created_at bigint NOT NULL, updated_at bigint NOT NULL
+  id text NOT NULL, user_id text NOT NULL DEFAULT '', label text NOT NULL, base_url text NOT NULL,
+  models_json jsonb NOT NULL DEFAULT '[]'::jsonb, verified_at text, api_key_cipher text,
+  created_at bigint NOT NULL, updated_at bigint NOT NULL, PRIMARY KEY (user_id, id)
 );
 `;
 
@@ -136,72 +141,77 @@ function summary(row: Row): ConversationSummary {
 
 export class NeonChatDatabase implements ChatDatabaseAdapter {
   private readonly sql: ReturnType<typeof neon>;
-  private readonly ready: Promise<void>;
 
+  /**
+   * Sem criação automática de schema: desde a migração multiusuário, o schema
+   * é aplicado manualmente com `pnpm db:migrate` (scripts/db/migrations) — ver
+   * PLANO-MULTIUSUARIO.md. Um banco não migrado falha com erro de relação
+   * inexistente, de propósito: schema automático em requisições foi removido.
+   */
   constructor(connectionString: string) {
     this.sql = neon(connectionString);
-    this.ready = this.migrate();
-  }
-
-  private async migrate(): Promise<void> {
-    const statements = SCHEMA.split(';').map((value) => value.trim()).filter(Boolean);
-    await this.sql.transaction(statements.map((statement) => this.sql.query(statement)));
   }
 
   private async rows(query: string, params: unknown[] = []): Promise<Row[]> {
-    await this.ready;
     return await this.sql.query(query, params) as Row[];
   }
 
-  async createConversation(data: CreateConversationData): Promise<Conversation> {
+  async ensureUser(userId: string): Promise<void> {
+    const now = Date.now();
+    await this.rows('INSERT INTO users (id,created_at,updated_at) VALUES ($1,$2,$2) ON CONFLICT (id) DO NOTHING', [userId, now]);
+    await this.rows('UPDATE users SET updated_at=$2 WHERE id=$1', [userId, now]);
+  }
+
+  async createConversation(userId: string, data: CreateConversationData): Promise<Conversation> {
     const id = data.id ?? randomUUID();
     const now = data.createdAt ?? Date.now();
     await this.rows(
-      `INSERT INTO conversations (id,title,provider_id,model_id,system_prompt,created_at,updated_at,archived)
-       VALUES ($1,$2,$3,$4,$5,$6,$6,false) RETURNING *`,
-      [id, data.title ?? 'Nova conversa', data.providerId, data.modelId, data.systemPrompt ?? null, now],
+      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,created_at,updated_at,archived)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,false) RETURNING *`,
+      [id, userId, data.title ?? 'Nova conversa', data.providerId, data.modelId, data.systemPrompt ?? null, now],
     );
-    return await this.getConversation(id) as Conversation;
+    return await this.getConversation(userId, id) as Conversation;
   }
 
-  async listConversations(options: { includeArchived?: boolean } = {}): Promise<ConversationSummary[]> {
+  async listConversations(userId: string, options: { includeArchived?: boolean } = {}): Promise<ConversationSummary[]> {
     const rows = await this.rows(
       `SELECT c.*, COUNT(m.id)::int AS message_count, COALESCE(SUM(m.cost_usd),0) AS total_cost_usd
          FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id
-        WHERE ($1::boolean OR NOT c.archived) GROUP BY c.id ORDER BY c.updated_at DESC,c.id DESC`,
-      [options.includeArchived === true],
+        WHERE c.user_id=$1 AND ($2::boolean OR NOT c.archived) GROUP BY c.id ORDER BY c.updated_at DESC,c.id DESC`,
+      [userId, options.includeArchived === true],
     );
     return rows.map(summary);
   }
 
-  async getConversation(id: string): Promise<Conversation | null> {
+  async getConversation(userId: string, id: string): Promise<Conversation | null> {
     const [row] = await this.rows(`SELECT c.*,COUNT(m.id)::int AS message_count,COALESCE(SUM(m.cost_usd),0) AS total_cost_usd
-      FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, [id]);
-    return row ? { ...summary(row), messages: await this.getMessages(id) } : null;
+      FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id WHERE c.id=$2 AND c.user_id=$1 GROUP BY c.id`, [userId, id]);
+    return row ? { ...summary(row), messages: await this.getMessages(userId, id) } : null;
   }
 
-  async updateConversation(id: string, data: UpdateConversationData): Promise<Conversation | null> {
-    const current = await this.getConversation(id);
+  async updateConversation(userId: string, id: string, data: UpdateConversationData): Promise<Conversation | null> {
+    const current = await this.getConversation(userId, id);
     if (!current) return null;
     await this.rows(
-      `UPDATE conversations SET title=$2,provider_id=$3,model_id=$4,system_prompt=$5,archived=$6,updated_at=$7
-        WHERE id=$1 RETURNING *`,
-      [id, data.title === undefined ? current.title : data.title, data.providerId ?? current.providerId,
+      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,archived=$7,updated_at=$8
+        WHERE id=$1 AND user_id=$2 RETURNING *`,
+      [id, userId, data.title === undefined ? current.title : data.title, data.providerId ?? current.providerId,
         data.modelId ?? current.modelId, data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt,
         data.archived ?? current.archived, Date.now()],
     );
-    return this.getConversation(id);
+    return this.getConversation(userId, id);
   }
 
-  async deleteConversation(id: string): Promise<boolean> {
-    return (await this.rows('DELETE FROM conversations WHERE id=$1 RETURNING id', [id])).length > 0;
+  async deleteConversation(userId: string, id: string): Promise<boolean> {
+    return (await this.rows('DELETE FROM conversations WHERE id=$1 AND user_id=$2 RETURNING id', [id, userId])).length > 0;
   }
 
-  async getMessages(conversationId: string): Promise<Message[]> {
-    return (await this.rows('SELECT * FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC,id ASC', [conversationId])).map(message);
+  async getMessages(userId: string, conversationId: string): Promise<Message[]> {
+    return (await this.rows(`SELECT m.* FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.user_id=$1
+      WHERE m.conversation_id=$2 ORDER BY m.created_at ASC,m.id ASC`, [userId, conversationId])).map(message);
   }
 
-  async insertMessage(data: CreateMessageData): Promise<Message> {
+  async insertMessage(userId: string, data: CreateMessageData): Promise<Message> {
     const id = data.id ?? randomUUID();
     const now = data.createdAt ?? Date.now();
     const [row] = await this.rows(
@@ -218,8 +228,9 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     return message(row);
   }
 
-  async updateMessage(id: string, data: UpdateMessageData): Promise<Message | null> {
-    const [currentRow] = await this.rows('SELECT * FROM messages WHERE id=$1', [id]);
+  async updateMessage(userId: string, id: string, data: UpdateMessageData): Promise<Message | null> {
+    const [currentRow] = await this.rows(`SELECT m.* FROM messages m
+      WHERE m.id=$1 AND m.conversation_id IN (SELECT id FROM conversations WHERE user_id=$2)`, [id, userId]);
     if (!currentRow) return null;
     const current = message(currentRow);
     const nextUsage = data.usage === undefined ? current.usage : data.usage;
@@ -227,18 +238,19 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const [row] = await this.rows(
       `UPDATE messages SET content=$2,reasoning=$3,prompt_tokens=$4,cached_tokens=$5,completion_tokens=$6,
        reasoning_tokens=$7,total_tokens=$8,cost_usd=$9,cost_estimated=$10,finish_reason=$11,error_code=$12,latency_ms=$13
-       WHERE id=$1 RETURNING *`,
+       WHERE id=$1 AND conversation_id IN (SELECT id FROM conversations WHERE user_id=$14) RETURNING *`,
       [id, data.content ?? current.content, data.reasoning === undefined ? current.reasoning : data.reasoning,
         nextUsage?.promptTokens ?? null, nextUsage?.cachedTokens ?? null, nextUsage?.completionTokens ?? null,
         nextUsage?.reasoningTokens ?? null, nextUsage?.totalTokens ?? null, nextCost?.usd ?? null,
         Boolean(nextCost?.estimated || nextUsage?.estimated), data.finishReason === undefined ? current.finishReason : data.finishReason,
-        data.errorCode === undefined ? current.errorCode : data.errorCode, data.latencyMs === undefined ? current.latencyMs : data.latencyMs],
+        data.errorCode === undefined ? current.errorCode : data.errorCode, data.latencyMs === undefined ? current.latencyMs : data.latencyMs,
+        userId],
     );
     await this.rows('UPDATE conversations SET updated_at=$2 WHERE id=$1', [current.conversationId, Date.now()]);
     return row ? message(row) : null;
   }
 
-  async upsertArtifact(data: UpsertArtifactData): Promise<Artifact> {
+  async upsertArtifact(userId: string, data: UpsertArtifactData): Promise<Artifact> {
     const now = data.createdAt ?? Date.now();
     const [row] = await this.rows(
       `INSERT INTO artifacts (id,conversation_id,slug,kind,language,title,current_version,created_at,updated_at)
@@ -253,8 +265,8 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
       createdAt: number(row.created_at), updatedAt: number(row.updated_at), versions: [] };
   }
 
-  async insertArtifactVersion(data: InsertArtifactVersionData): Promise<ArtifactVersion> {
-    const artifact = await this.upsertArtifact(data);
+  async insertArtifactVersion(userId: string, data: InsertArtifactVersionData): Promise<ArtifactVersion> {
+    const artifact = await this.upsertArtifact(userId, data);
     const nextVersion = data.version ?? artifact.currentVersion + 1;
     const now = data.createdAt ?? Date.now();
     const [row] = await this.rows(
@@ -267,8 +279,9 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     return version(row);
   }
 
-  async getArtifacts(conversationId: string): Promise<Artifact[]> {
-    const artifactRows = await this.rows('SELECT * FROM artifacts WHERE conversation_id=$1 AND current_version>0 ORDER BY updated_at DESC,id DESC', [conversationId]);
+  async getArtifacts(userId: string, conversationId: string): Promise<Artifact[]> {
+    const artifactRows = await this.rows(`SELECT a.* FROM artifacts a JOIN conversations c ON c.id=a.conversation_id AND c.user_id=$1
+      WHERE a.conversation_id=$2 AND a.current_version>0 ORDER BY a.updated_at DESC,a.id DESC`, [userId, conversationId]);
     const result: Artifact[] = [];
     for (const row of artifactRows) {
       const parsed = ArtifactKindSchema.safeParse(row.kind);
@@ -281,35 +294,37 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     return result;
   }
 
-  async getArtifactVersion(conversationId: string, slug: string, versionNumber: number): Promise<ArtifactVersion | null> {
+  async getArtifactVersion(userId: string, conversationId: string, slug: string, versionNumber: number): Promise<ArtifactVersion | null> {
     const [row] = await this.rows(`SELECT av.* FROM artifact_versions av JOIN artifacts a ON a.id=av.artifact_id
-      WHERE a.conversation_id=$1 AND a.slug=$2 AND av.version=$3`, [conversationId, slug, versionNumber]);
+      JOIN conversations c ON c.id=a.conversation_id AND c.user_id=$1
+      WHERE a.conversation_id=$2 AND a.slug=$3 AND av.version=$4`, [userId, conversationId, slug, versionNumber]);
     return row ? version(row) : null;
   }
 
-  async updateArtifactVersionCost(conversationId: string, slug: string, versionNumber: number, outputTokens: number | null, costUsd: number | null): Promise<boolean> {
-    return (await this.rows(`UPDATE artifact_versions SET output_tokens=$4,cost_usd=$5 WHERE artifact_id=(
-      SELECT id FROM artifacts WHERE conversation_id=$1 AND slug=$2) AND version=$3 RETURNING version`,
-    [conversationId, slug, versionNumber, outputTokens, costUsd])).length > 0;
+  async updateArtifactVersionCost(userId: string, conversationId: string, slug: string, versionNumber: number, outputTokens: number | null, costUsd: number | null): Promise<boolean> {
+    return (await this.rows(`UPDATE artifact_versions SET output_tokens=$5,cost_usd=$6 WHERE version=$4 AND artifact_id IN (
+      SELECT a.id FROM artifacts a JOIN conversations c ON c.id=a.conversation_id AND c.user_id=$1
+      WHERE a.conversation_id=$2 AND a.slug=$3) RETURNING version`,
+    [userId, conversationId, slug, versionNumber, outputTokens, costUsd])).length > 0;
   }
 
-  async listProviderSettings(): Promise<ProviderSettingsRecord[]> {
-    return (await this.rows('SELECT * FROM provider_settings ORDER BY label ASC,id ASC')).map((row) => ({
+  async listProviderSettings(userId: string): Promise<ProviderSettingsRecord[]> {
+    return (await this.rows('SELECT * FROM provider_settings WHERE user_id=$1 ORDER BY label ASC,id ASC', [userId])).map((row) => ({
       id: text(row.id), label: text(row.label), baseURL: text(row.base_url),
       models: Array.isArray(row.models_json) ? row.models_json : [], verifiedAt: nullableText(row.verified_at),
       apiKeyCipher: nullableText(row.api_key_cipher), createdAt: number(row.created_at), updatedAt: number(row.updated_at),
     }));
   }
 
-  async upsertProviderSettings(data: UpsertProviderSettingsData): Promise<ProviderSettingsRecord> {
+  async upsertProviderSettings(userId: string, data: UpsertProviderSettingsData): Promise<ProviderSettingsRecord> {
     const now = Date.now();
     const [row] = await this.rows(
-      `INSERT INTO provider_settings (id,label,base_url,models_json,verified_at,api_key_cipher,created_at,updated_at)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$7)
-       ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label,base_url=EXCLUDED.base_url,models_json=EXCLUDED.models_json,
-       verified_at=EXCLUDED.verified_at,api_key_cipher=CASE WHEN $8::boolean THEN EXCLUDED.api_key_cipher ELSE provider_settings.api_key_cipher END,
+      `INSERT INTO provider_settings (id,user_id,label,base_url,models_json,verified_at,api_key_cipher,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$8)
+       ON CONFLICT (user_id,id) DO UPDATE SET label=EXCLUDED.label,base_url=EXCLUDED.base_url,models_json=EXCLUDED.models_json,
+       verified_at=EXCLUDED.verified_at,api_key_cipher=CASE WHEN $9::boolean THEN EXCLUDED.api_key_cipher ELSE provider_settings.api_key_cipher END,
        updated_at=EXCLUDED.updated_at RETURNING *`,
-      [data.id, data.label, data.baseURL, JSON.stringify(data.models), data.verifiedAt ?? null,
+      [data.id, userId, data.label, data.baseURL, JSON.stringify(data.models), data.verifiedAt ?? null,
         data.apiKeyCipher ?? null, now, data.apiKeyCipher !== undefined],
     );
     return { id: text(row.id), label: text(row.label), baseURL: text(row.base_url), models: Array.isArray(row.models_json) ? row.models_json : [],
@@ -317,30 +332,33 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
       createdAt: number(row.created_at), updatedAt: number(row.updated_at) };
   }
 
-  async deleteProviderSettings(id: string): Promise<boolean> {
-    return (await this.rows('DELETE FROM provider_settings WHERE id=$1 RETURNING id', [id])).length > 0;
+  async deleteProviderSettings(userId: string, id: string): Promise<boolean> {
+    return (await this.rows('DELETE FROM provider_settings WHERE id=$1 AND user_id=$2 RETURNING id', [id, userId])).length > 0;
   }
 
-  async searchConversations(query: string): Promise<ConversationSummary[]> {
+  async searchConversations(userId: string, query: string): Promise<ConversationSummary[]> {
     const pattern = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
     const rows = await this.rows(
       `SELECT c.*,COUNT(m.id)::int AS message_count,COALESCE(SUM(m.cost_usd),0) AS total_cost_usd
        FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id
-       WHERE EXISTS (SELECT 1 FROM messages sm WHERE sm.conversation_id=c.id AND sm.content ILIKE $1 ESCAPE '\\')
+       WHERE c.user_id=$2 AND (
+          EXISTS (SELECT 1 FROM messages sm WHERE sm.conversation_id=c.id AND sm.content ILIKE $1 ESCAPE '\\')
           OR EXISTS (SELECT 1 FROM artifacts a JOIN artifact_versions av ON av.artifact_id=a.id AND av.version=a.current_version
-                     WHERE a.conversation_id=c.id AND av.content ILIKE $1 ESCAPE '\\')
-       GROUP BY c.id ORDER BY c.updated_at DESC,c.id DESC`, [pattern]);
+                     WHERE a.conversation_id=c.id AND av.content ILIKE $1 ESCAPE '\\'))
+       GROUP BY c.id ORDER BY c.updated_at DESC,c.id DESC`, [pattern, userId]);
     return rows.map(summary);
   }
 
-  async getCostAnalytics(days = 30): Promise<CostAnalyticsResponse> {
+  async getCostAnalytics(userId: string, days = 30): Promise<CostAnalyticsResponse> {
     const since = Date.now() - Math.min(365, Math.max(1, Math.trunc(days))) * 86_400_000;
     const [daily, byModel] = await Promise.all([
       this.rows(`SELECT to_char(to_timestamp(created_at/1000.0),'YYYY-MM-DD') AS day,COALESCE(SUM(cost_usd),0) AS cost_usd,COUNT(*)::int AS message_count
-        FROM messages WHERE role='assistant' AND cost_usd IS NOT NULL AND created_at >= $1 GROUP BY day ORDER BY day DESC`, [since]),
+        FROM messages WHERE role='assistant' AND cost_usd IS NOT NULL AND created_at >= $1
+        AND conversation_id IN (SELECT id FROM conversations WHERE user_id=$2) GROUP BY day ORDER BY day DESC`, [since, userId]),
       this.rows(`SELECT provider_id,model_id,COALESCE(SUM(cost_usd),0) AS cost_usd,COUNT(*)::int AS message_count
         FROM messages WHERE role='assistant' AND cost_usd IS NOT NULL AND provider_id IS NOT NULL AND model_id IS NOT NULL AND created_at >= $1
-        GROUP BY provider_id,model_id ORDER BY cost_usd DESC`, [since]),
+        AND conversation_id IN (SELECT id FROM conversations WHERE user_id=$2)
+        GROUP BY provider_id,model_id ORDER BY cost_usd DESC`, [since, userId]),
     ]);
     return {
       totalCostUsd: daily.reduce((sum, row) => sum + number(row.cost_usd), 0),

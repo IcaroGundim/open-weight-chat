@@ -12,6 +12,8 @@ const ACTIONABLE_MESSAGES: Record<ErrorCode, string> = {
     'O modelo selecionado não foi encontrado pelo provedor. Atualize o modelo configurado e tente novamente.',
   UPSTREAM_TIMEOUT:
     'O provedor demorou demais para responder. Tente novamente ou escolha outro provedor.',
+  UNAUTHORIZED:
+    'Sua sessão expirou ou o token é inválido. Faça login novamente.',
   UNKNOWN:
     'O provedor retornou um erro inesperado. Confira a configuração e tente novamente.',
 };
@@ -52,6 +54,8 @@ export function statusForCode(code: ErrorCode): number {
     case 'RATE_LIMIT':
       return 429;
     case 'INVALID_API_KEY':
+      return 401;
+    case 'UNAUTHORIZED':
       return 401;
     case 'MODEL_NOT_FOUND':
       return 404;

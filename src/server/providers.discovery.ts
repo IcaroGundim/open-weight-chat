@@ -1,8 +1,16 @@
 import type { ProviderModelInput } from '../shared/types';
 import { AppError } from './errors';
+import { safeFetchWithRedirects } from './ssrf';
 
 /** Contexto conservador usado quando o endpoint /models não informa a janela. */
 export const DEFAULT_DISCOVERED_CONTEXT_WINDOW = 131_072;
+/**
+ * Teto do catálogo descoberto: provedores agregadores (ex.: OpenRouter)
+ * expõem listas enormes em /models; limitar a 500 modelos evita estourar a
+ * interface, o banco e a própria requisição. Os primeiros 500 após a
+ * deduplicação por id são mantidos.
+ */
+export const MAX_DISCOVERED_MODELS = 500;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 
 type JsonRecord = Record<string, unknown>;
@@ -145,13 +153,23 @@ export async function discoverProviderModels(
   const url = `${baseURL.replace(/\/+$/u, '')}/models`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS);
+  // Em produção (NODE_ENV/VERCEL) o SSRF exige HTTPS e bloqueia loopback;
+  // em dev, http://localhost continua permitido para Ollama e afins.
+  const production = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
   try {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     let response: Response;
     try {
-      response = await fetchImpl(url, { method: 'GET', headers, signal: controller.signal });
-    } catch {
+      response = await safeFetchWithRedirects(
+        url,
+        { method: 'GET', headers, signal: controller.signal },
+        { fetchImpl, production, allowLocalhost: !production },
+      );
+    } catch (error) {
+      // Erros de SSRF/redirecionamento já são AppError com mensagem própria —
+      // propagam como estão; o resto é falha de conexão ou timeout.
+      if (error instanceof AppError) throw error;
       if (controller.signal.aborted) {
         throw new AppError('UPSTREAM_TIMEOUT', {
           message: 'A consulta de modelos demorou demais. Confira a URL e tente novamente.',
@@ -175,13 +193,16 @@ export async function discoverProviderModels(
       .map(toModelInput)
       .filter((model): model is ProviderModelInput => Boolean(model));
     const unique = new Map(discovered.map((model) => [model.id, model]));
-    if (unique.size === 0) {
+    // Teto de segurança: depois da deduplicação, mantém apenas os primeiros
+    // MAX_DISCOVERED_MODELS (a ordem do provedor é preservada).
+    const models = [...unique.values()].slice(0, MAX_DISCOVERED_MODELS);
+    if (models.length === 0) {
       throw new AppError('UNKNOWN', {
         status: 400,
         message: 'O provedor respondeu, mas não informou nenhum modelo em /models.',
       });
     }
-    return [...unique.values()];
+    return models;
   } finally {
     clearTimeout(timer);
   }
