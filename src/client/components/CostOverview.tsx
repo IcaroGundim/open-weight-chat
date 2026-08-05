@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { getCostAnalytics } from '../api';
 import type { CostAnalytics } from '../types';
+import { AgentOrb } from './AgentOrb';
 import { formatCost } from './CostBadge';
 
 type CostOverviewProps = {
@@ -57,7 +58,7 @@ export function CostOverview({ onClose }: CostOverviewProps) {
 
         {error ? <p className="cost-modal-error" role="alert">{error}</p> : null}
         {!analytics && !error ? (
-          <div className="cost-modal-loading"><span className="loading-spinner" aria-hidden="true" /> Lendo o registro…</div>
+          <div className="cost-modal-loading"><AgentOrb activity="compilando" label="Lendo o registro de custos" /> Lendo o registro…</div>
         ) : null}
 
         {analytics ? (

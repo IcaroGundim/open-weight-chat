@@ -953,14 +953,15 @@ kbd {
   color: var(--ink-3);
   font-size: 14px;
 }
-.loading-spinner {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--rule);
-  border-top-color: var(--wine);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+
+/* Espera pelo Clerk e troca de conta. Antes o app devolvia null aqui e a tela
+   ficava vazia; o orb ocupa a janela inteira porque nada mais está montado. */
+.auth-booting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--paper);
 }
 
 /* -------------------------------------------------------------- composer */
@@ -1350,8 +1351,6 @@ kbd {
 .provider-model-item small { overflow: hidden; color: var(--ink-3); font-family: var(--mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model-item em { flex: 0 0 auto; color: var(--ink-3); font-family: var(--mono); font-size: 12px; font-style: normal; }
 .provider-models-empty { margin: 0; color: var(--ink-3); font-size: 13px; line-height: 1.45; }
-.provider-spin { animation: provider-spin 0.8s linear infinite; }
-@keyframes provider-spin { to { transform: rotate(360deg); } }
 
 .provider-form-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .provider-form-note { color: var(--ink-3); font-size: 12px; }
@@ -1658,7 +1657,6 @@ kbd {
 .settings-footer .btn:hover { color: var(--wine); }
 
 @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

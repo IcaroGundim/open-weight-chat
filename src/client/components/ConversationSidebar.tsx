@@ -3,6 +3,7 @@ import { FileText, Pencil, Plus, Search, Settings, Trash2, X } from 'lucide-reac
 import { searchConversations as searchConversationsRequest } from '../api';
 import { useChatStore } from '../store/chat';
 import type { Conversation } from '../types';
+import { AgentOrb } from './AgentOrb';
 
 type ConversationSidebarProps = {
   open: boolean;
@@ -157,7 +158,7 @@ export function ConversationSidebar({ open, onOpen, onClose, onOpenSettings }: C
 
         <nav className="conversation-list" aria-label="Lista de conversas">
           {isLoading ? (
-            <p className="sidebar-state">Carregando…</p>
+            <p className="sidebar-state"><AgentOrb activity="carregando" label="Carregando as conversas" /> Carregando…</p>
           ) : filtered.length === 0 ? (
             <p className="sidebar-state">
               <FileText size={16} aria-hidden="true" />

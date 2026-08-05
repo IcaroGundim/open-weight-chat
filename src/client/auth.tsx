@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useAuth } from '@clerk/react';
+import { AgentOrb } from './components/AgentOrb';
 import { ChatView } from './components/ChatView';
 import { SignInScreen } from './components/SignInScreen';
 import { useChatStore } from './store/chat';
@@ -60,7 +61,18 @@ export function AuthenticatedApp() {
 
   // Enquanto a ponte troca de conta, não exibe dados do estado anterior nem
   // monta uma ChatView capaz de disparar fetch com o token ainda antigo.
-  if (!isLoaded || bridgedUserId !== activeUserId) return null;
+  //
+  // Antes isto devolvia `null`, e a espera pelo Clerk aparecia como uma tela
+  // vazia — indistinguível de um app quebrado justamente no primeiro contato,
+  // que é quando a dúvida custa mais. O orb não muda o que é montado: só
+  // preenche o intervalo dizendo que há algo em curso.
+  if (!isLoaded || bridgedUserId !== activeUserId) {
+    return (
+      <div className="auth-booting">
+        <AgentOrb activity="conectando" size={64} />
+      </div>
+    );
+  }
 
   return isSignedIn ? <ChatView key={activeUserId ?? 'sem-usuario'} /> : <SignInScreen />;
 }

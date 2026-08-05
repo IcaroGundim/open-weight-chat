@@ -1,6 +1,7 @@
 import { Check, Copy, Download, FileCode2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ArtifactRenderer } from '../render/ArtifactRenderer';
+import { AgentOrb } from './AgentOrb';
 import { useChatStore } from '../store/chat';
 import { EMPTY_ARTIFACTS, type Artifact, type ArtifactKind } from '../types';
 
@@ -147,7 +148,7 @@ export function ArtifactPanel({ conversationId, onClose }: ArtifactPanelProps) {
           </footer>
         </>
       ) : (
-        <div className="artifact-panel-empty"><span className="loading-spinner" aria-hidden="true" /> Reconstruindo artefato…</div>
+        <div className="artifact-panel-empty"><AgentOrb activity="reconstruindo" /> Reconstruindo artefato…</div>
       )}
     </aside>
   );

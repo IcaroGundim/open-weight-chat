@@ -15,7 +15,15 @@ import { useSettingsStore } from '../store/settings';
  * os três momentos nunca divirjam entre telas: o mesmo tipo de espera precisa
  * ter sempre a mesma aparência, senão o indicador vira ruído em vez de sinal.
  */
-export type AgentActivity = 'pensando' | 'construindo' | 'buscando';
+export type AgentActivity =
+  | 'pensando'
+  | 'construindo'
+  | 'revisando'
+  | 'buscando'
+  | 'conectando'
+  | 'carregando'
+  | 'reconstruindo'
+  | 'compilando';
 
 const ACTIVITY_STATE: Record<AgentActivity, OrbState> = {
   // Anel de face inteira em morfologia lenta: presença calma, que não disputa
@@ -24,15 +32,37 @@ const ACTIVITY_STATE: Record<AgentActivity, OrbState> = {
   // Contorno pontilhado que se remodela — a leitura de "tomando forma" é
   // literal, e casa com o artefato crescendo no painel.
   construindo: 'shaping',
+  // Faixas que se embaralham e voltam a encaixar. Revisar um artefato é
+  // exatamente isso: o texto existente se desmancha nos trechos trocados e
+  // assenta de novo. Distinguir de `construindo` informa, antes do diff, que
+  // nada está sendo escrito do zero.
+  revisando: 'solving',
   // Meridiano de varredura percorrendo o globo: a metáfora de busca já é a do
   // próprio desenho.
   buscando: 'searching',
+  // Constelação que se cabeia sozinha, com pacotes correndo pelas arestas —
+  // a imagem de uma sessão sendo estabelecida.
+  conectando: 'connecting',
+  // Partículas em órbitas inclinadas: trabalho genérico, sem prometer uma
+  // semântica que a espera não tem.
+  carregando: 'working',
+  // Três fios trançando ao redor da esfera. Reconstruir um artefato é juntar
+  // versões numa só peça.
+  reconstruindo: 'weaving',
+  // Faixa ondulante de várias bandas, para o relatório de custos sendo
+  // montado a partir das agregações por dia e por modelo.
+  compilando: 'composing',
 };
 
 const ACTIVITY_LABEL: Record<AgentActivity, string> = {
   pensando: 'O assistente está pensando',
   construindo: 'O artefato está sendo construído',
+  revisando: 'O artefato está sendo revisado',
   buscando: 'Buscando os modelos do provedor',
+  conectando: 'Estabelecendo a sessão',
+  carregando: 'Carregando',
+  reconstruindo: 'Reconstruindo o artefato',
+  compilando: 'Compilando o relatório de custos',
 };
 
 interface AgentOrbProps {

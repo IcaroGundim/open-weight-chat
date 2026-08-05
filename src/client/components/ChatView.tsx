@@ -9,6 +9,7 @@ import { CostOverview } from './CostOverview';
 import { ArtifactPanel } from './ArtifactPanel';
 import { Composer } from './Composer';
 import { ConversationSidebar } from './ConversationSidebar';
+import { AgentOrb } from './AgentOrb';
 import { MessageBubble } from './MessageBubble';
 import { ModelCard } from './ModelCard';
 import { ModelPicker } from './ModelPicker';
@@ -220,7 +221,7 @@ export function ChatView() {
               </div>
             </div>
           ) : isLoadingConversations || loadingConversationId === activeConversationId ? (
-            <div className="conversation-loading"><span className="loading-spinner" aria-hidden="true" /> Carregando mensagens…</div>
+            <div className="conversation-loading"><AgentOrb activity="carregando" label="Carregando mensagens" /> Carregando mensagens…</div>
           ) : messages.length === 0 ? (
             <div className="empty-conversation">
               <h2>Comece por uma pergunta específica.</h2>

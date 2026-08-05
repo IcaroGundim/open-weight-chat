@@ -267,7 +267,12 @@ export function ProviderSettingsTab() {
                       aria-label={`Atualizar modelos de ${provider.label}`}
                       title="Atualizar modelos"
                     >
-                      <RefreshCw size={15} className={discoveringId === provider.id ? 'provider-spin' : undefined} />
+                      {/* Mesma espera do botão "Salvar e buscar modelos" — a
+                          consulta ao /models do provedor —, então mesmo
+                          indicador. O ícone girando era um sinal só desta tela. */}
+                      {discoveringId === provider.id
+                        ? <AgentOrb activity="buscando" label={`Buscando os modelos de ${provider.label}`} />
+                        : <RefreshCw size={15} />}
                     </button>
                     {provider.hasKey ? (
                       <button type="button" className="btn btn-icon" onClick={() => { setConfirmingId(null); setConfirmingKeyId(provider.id); }} aria-label={`Apagar a chave de ${provider.label}`} title="Apagar a chave">

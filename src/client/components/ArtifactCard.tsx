@@ -35,6 +35,11 @@ export function ArtifactCard({ slug, versionNumber, artifact }: ArtifactCardProp
   const content = streamingContent ?? version?.content ?? '';
   const Icon = iconFor(artifact?.kind);
   const isStreaming = streamingContent !== undefined;
+  // Reescrever do zero e aplicar um find/replace produzem uma versão nova do
+  // mesmo jeito, mas custam e arriscam coisas diferentes. A operação já está
+  // registrada na versão; mostrá-la enquanto o stream corre deixa claro, antes
+  // de abrir o painel, se o conteúdo anterior está sendo preservado.
+  const isRevision = version?.operation === 'update';
 
   return (
     <div className="artifact-card" data-artifact-slug={slug}>
@@ -44,7 +49,11 @@ export function ArtifactCard({ slug, versionNumber, artifact }: ArtifactCardProp
         <span>{artifact ? kindLabels[artifact.kind] : 'Artefato'}{artifact?.language ? ` · ${artifact.language}` : ''}</span>
       </div>
       <div className="artifact-card-metrics">
-        {isStreaming ? <AgentOrb activity="construindo" label="Artefato sendo gerado" /> : <span className="num">v{versionNumber}</span>}
+        {isStreaming ? (
+          isRevision
+            ? <AgentOrb activity="revisando" label="Artefato sendo revisado" />
+            : <AgentOrb activity="construindo" label="Artefato sendo gerado" />
+        ) : <span className="num">v{versionNumber}</span>}
         <span className="num">{lineCount(content)} linhas</span>
       </div>
       <button
