@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import handler from '../../api/[...route]';
+import handler from './vercel-handler';
 import { createApp } from './index';
 
 const serverDir = dirname(fileURLToPath(import.meta.url));

@@ -11,7 +11,8 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 0.0.0.0\" \"tsx watch src/server/main.ts\"",
     "build:client": "vite build",
-    "build": "vite build && esbuild src/server/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/server.js --external:node:*",
+    "build:api": "esbuild src/server/vercel-handler.ts --bundle --platform=node --target=node24 --format=esm --packages=external --outfile=api/[...route].js",
+    "build": "pnpm build:client && pnpm build:api && esbuild src/server/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/server.js --external:node:*",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx scripts/db/migrate.ts",
