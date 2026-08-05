@@ -38,6 +38,7 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "shiki": "^3.12.0",
+    "thinking-orbs": "^0.2.0",
     "zod": "^4.1.5",
     "zustand": "^5.0.8"
   },

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AgentOrb } from './AgentOrb';
 
 type ReasoningBlockProps = {
   reasoning?: string;
@@ -13,6 +14,7 @@ export function ReasoningBlock({ reasoning, tokens, streaming = false }: Reasoni
   return (
     <details className="reasoning-block" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>
+        {streaming ? <AgentOrb activity="pensando" label="Raciocínio em andamento" /> : null}
         <span>{streaming ? 'Raciocínio em andamento' : 'Raciocínio do modelo'}</span>
         {tokens ? <span className="reasoning-count">{tokens.toLocaleString('pt-BR')} tokens</span> : null}
       </summary>

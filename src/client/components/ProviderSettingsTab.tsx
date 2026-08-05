@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { KeyRound, Pencil, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { deleteProviderSettings, discoverProviderModels, getProviderSettings, saveProviderSettings } from '../api';
 import { useChatStore } from '../store/chat';
+import { AgentOrb } from './AgentOrb';
 import type { ProviderSettings, SecretStorageStatus } from '../types';
 
 interface Draft {
@@ -364,7 +365,9 @@ export function ProviderSettingsTab() {
             <span className="provider-form-note">A descoberta usa a chave somente no servidor.</span>
             <span className="provider-form-spacer" />
             <button type="button" className="btn" onClick={() => { setDraft(null); setEditingId(null); setError(null); setSuccess(null); }}>Concluir</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Salvando e buscando…' : 'Salvar e buscar modelos'}</button>
+            <button type="submit" className="btn btn-primary provider-submit" disabled={saving}>
+              {saving ? <><AgentOrb activity="buscando" /> Salvando e buscando…</> : 'Salvar e buscar modelos'}
+            </button>
           </div>
         </form>
       ) : (

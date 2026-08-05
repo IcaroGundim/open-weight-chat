@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { Markdown } from '../render/Markdown';
 import { useChatStore } from '../store/chat';
+import { AgentOrb } from './AgentOrb';
 import { ArtifactCard } from './ArtifactCard';
 import { CostBadge } from './CostBadge';
 import { ReasoningBlock } from './ReasoningBlock';
@@ -89,7 +90,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         ) : message.content ? (
           <AssistantContent message={message} />
         ) : isStreaming ? (
-          <span className="typing-indicator" aria-label="Assistente está respondendo"><i /><i /><i /></span>
+          <AgentOrb activity="pensando" label="Assistente está respondendo" />
         ) : null}
 
         {message.reasoning ? (

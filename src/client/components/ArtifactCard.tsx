@@ -1,5 +1,6 @@
 import { FileCode2, FileText, GitBranch, Image, PanelRightOpen } from 'lucide-react';
 import { useChatStore } from '../store/chat';
+import { AgentOrb } from './AgentOrb';
 import type { Artifact, ArtifactKind, ArtifactVersion } from '../types';
 
 type ArtifactCardProps = {
@@ -43,7 +44,7 @@ export function ArtifactCard({ slug, versionNumber, artifact }: ArtifactCardProp
         <span>{artifact ? kindLabels[artifact.kind] : 'Artefato'}{artifact?.language ? ` · ${artifact.language}` : ''}</span>
       </div>
       <div className="artifact-card-metrics">
-        {isStreaming ? <span className="artifact-card-dots" aria-label="Artefato sendo gerado"><i /><i /><i /></span> : <span className="num">v{versionNumber}</span>}
+        {isStreaming ? <AgentOrb activity="construindo" label="Artefato sendo gerado" /> : <span className="num">v{versionNumber}</span>}
         <span className="num">{lineCount(content)} linhas</span>
       </div>
       <button

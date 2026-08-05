@@ -252,10 +252,6 @@ kbd {
 .artifact-card-copy span { overflow: hidden; color: var(--ink-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-card-metrics { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 .artifact-card-open { color: var(--wine); }
-.artifact-card-dots { display: inline-flex; gap: 3px; }
-.artifact-card-dots i { width: 4px; height: 4px; background: var(--wine); border-radius: 50%; animation: pulse 1s infinite; }
-.artifact-card-dots i:nth-child(2) { animation-delay: 0.15s; }
-.artifact-card-dots i:nth-child(3) { animation-delay: 0.3s; }
 
 .artifact-panel {
   display: flex;
@@ -799,16 +795,11 @@ kbd {
 .message-error-text { margin: 10px 0 0; color: var(--danger); font-size: 14px; }
 .context-truncated-note { margin: 10px 0 0; color: var(--ochre); font-size: 12px; }
 
-.typing-indicator { display: inline-flex; align-items: center; gap: 5px; height: 24px; }
-.typing-indicator i {
-  width: 5px;
-  height: 5px;
-  background: var(--ink-3);
-  border-radius: 50%;
-  animation: typing 1s infinite ease-in-out;
-}
-.typing-indicator i:nth-child(2) { animation-delay: 0.15s; }
-.typing-indicator i:nth-child(3) { animation-delay: 0.3s; }
+/* Orb de atividade (thinking-orbs). O canvas se pinta sozinho a partir do
+   data-theme e já traz o próprio dimensionamento pelo preset; daqui sai apenas
+   o alinhamento com o texto que ele acompanha. `flex: none` impede que os
+   contêineres flex do botão e do <summary> o comprimam. */
+.agent-orb { display: inline-block; vertical-align: middle; flex: none; }
 
 .reasoning-block {
   margin: 14px 0 0;
@@ -1667,10 +1658,6 @@ kbd {
 .settings-footer .btn:hover { color: var(--wine); }
 
 @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
-@keyframes typing {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
-  30% { transform: translateY(-3px); opacity: 1; }
-}
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
