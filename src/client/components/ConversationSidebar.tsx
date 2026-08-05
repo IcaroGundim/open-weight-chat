@@ -253,7 +253,12 @@ export function ConversationSidebar({ open, onOpen, onClose, onOpenSettings }: C
           </button>
           <div className="sidebar-status">
             <span className="status-dot" aria-hidden="true" />
-            <span>SQLite local · chaves no servidor</span>
+            {/* Nada de nomear o banco aqui: o texto era fixo em "SQLite local" e
+                mentia no deploy, onde o banco é Postgres/Neon. Descobrir o motor
+                pelo servidor também está fora de questão — /api/health é público
+                e não expõe detalhes de banco de propósito. O que vale dizer ao
+                usuário é a garantia que não muda entre ambientes. */}
+            <span>Chaves cifradas no servidor</span>
           </div>
         </div>
       </aside>

@@ -14,7 +14,7 @@ Deslogado, o app mostra a tela de login; depois de entrar, todas as chamadas a `
 
 Requer Node 24.16+ e pnpm 11.
 
-1. Crie um app no painel do Clerk (https://dashboard.clerk.com) e copie `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` e `VITE_CLERK_PUBLISHABLE_KEY` para o `.env` (o Vite lê variáveis `VITE_*` do `.env`).
+1. Crie um app no painel do Clerk (https://dashboard.clerk.com) e copie `CLERK_SECRET_KEY` e `VITE_CLERK_PUBLISHABLE_KEY` para o `.env` (o Vite lê variáveis `VITE_*` do `.env`).
 2. No painel do Clerk, habilite os provedores de login **Google** e **e-mail verificado**.
 3. Rode:
 
@@ -44,8 +44,7 @@ No painel **Vercel → Project → Settings → Environment Variables**, configu
 | `DATABASE_URL` | Connection string com pooling copiada em **Neon → Connect** |
 | `PROVIDER_SECRET_KEY` | Segredo aleatório estável, com pelo menos 16 caracteres |
 | `CLERK_SECRET_KEY` | Chave secreta do app Clerk (Dashboard → API Keys) — valida os tokens em `/api/*` |
-| `CLERK_PUBLISHABLE_KEY` | Chave publicável do Clerk (começa com `pk_`) |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Mesmo valor de `CLERK_PUBLISHABLE_KEY` — é lida pelo Vite no build |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Chave publicável do Clerk (começa com `pk_`) — é lida pelo Vite **no build** |
 | `CLERK_FRONTEND_API_ORIGIN` | Origem do frontend Clerk, ex.: `https://SEU-APP.clerk.accounts.dev` — o valor exato aparece no painel Clerk; o servidor a usa também para montar o CSP automaticamente |
 | `APP_ORIGIN` | **Obrigatória em produção.** Origem pública exata do deploy, ex.: `https://SEU-PROJETO.vercel.app`, sem caminho/query/fragmento. É a única origem que recebe CORS para `/api/*`. |
 

@@ -25,6 +25,8 @@ pnpm test:watch
 
 O proxy do Vite encaminha `/api` para `localhost:8787`, então em desenvolvimento frontend e API ficam na mesma origem e `APP_ORIGIN` pode ficar vazia.
 
+`.github/workflows/ci.yml` roda typecheck, testes e build em push para `main` e em pull request. O `pnpm design` entra como `continue-on-error`: ele sai com código 1 pelas 18 divergências conhecidas do `SettingsPanel`, e um sinal permanentemente vermelho deixaria de ser sinal. Se for zerar essas divergências, torne-o obrigatório no mesmo commit.
+
 ## O que é
 
 Chat self-hosted **BYOK** (cada usuário traz a própria chave) para qualquer endpoint **OpenAI-compatible**. A plataforma não tem créditos nem cobrança: ela orquestra, mede custo e isola contas. Login por Clerk (Google/e-mail).

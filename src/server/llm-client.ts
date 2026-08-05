@@ -283,10 +283,10 @@ export class OpenAICompatibleClient {
           if (process.env.OPENROUTER_HTTP_REFERER) headers['HTTP-Referer'] = process.env.OPENROUTER_HTTP_REFERER;
           if (process.env.OPENROUTER_APP_TITLE) headers['X-Title'] = process.env.OPENROUTER_APP_TITLE;
         }
-        // O endpoint vem da configuraÃ§Ã£o BYOK do usuÃ¡rio. Mesmo tendo sido
-        // validado ao salvar, ele pode ter sido gravado antes da proteÃ§Ã£o ou
+        // O endpoint vem da configuração BYOK do usuário. Mesmo tendo sido
+        // validado ao salvar, ele pode ter sido gravado antes da proteção ou
         // ter mudado via DNS; portanto toda tentativa de chat revalida URL,
-        // DNS e redirecionamentos antes de abrir a conexÃ£o com o upstream.
+        // DNS e redirecionamentos antes de abrir a conexão com o upstream.
         response = await safeFetchWithRedirects(
           `${options.baseURL.replace(/\/+$/u, '')}/chat/completions`,
           {

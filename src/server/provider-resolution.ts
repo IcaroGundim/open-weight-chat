@@ -90,10 +90,10 @@ function envApiKeyFallback(base: ProviderConfig | undefined): string | null {
 }
 
 /**
- * O catÃ¡logo nunca deve sugerir como utilizÃ¡vel uma URL que o servidor
- * bloquearia no chat. Isso desativa o Ollama em localhost na produÃ§Ã£o, sem
- * impedir que o usuÃ¡rio configure um endpoint Ollama pÃºblico com HTTPS.
- * A resoluÃ§Ã£o de DNS e a validaÃ§Ã£o de redirecionamentos continuam ocorrendo
+ * O catálogo nunca deve sugerir como utilizável uma URL que o servidor
+ * bloquearia no chat. Isso desativa o Ollama em localhost na produção, sem
+ * impedir que o usuário configure um endpoint Ollama público com HTTPS.
+ * A resolução de DNS e a validação de redirecionamentos continuam ocorrendo
  * no momento do fetch (safeFetchWithRedirects).
  */
 function hasSafeProviderUrl(baseURL: string): boolean {

@@ -111,9 +111,9 @@ async function assertUserModelSelection(
   const provider = await resolveProvider(userId, providerId, db);
   const model = provider?.models.find((item) => item.id === modelId);
   if (!provider || !model) throw modelNotFound();
-  // Rejeita tambÃ©m registros legados que tenham sido criados antes da
-  // validaÃ§Ã£o de URL. A checagem completa (DNS e redirecionamentos) acontece
-  // novamente no fetch do stream, antes de qualquer conexÃ£o com o upstream.
+  // Rejeita também registros legados que tenham sido criados antes da
+  // validação de URL. A checagem completa (DNS e redirecionamentos) acontece
+  // novamente no fetch do stream, antes de qualquer conexão com o upstream.
   assertSafeProviderUrl(provider.baseURL);
   return { provider, model };
 }

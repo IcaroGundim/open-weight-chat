@@ -1,0 +1,43 @@
+# Portão de verificação antes do deploy.
+#
+# A Vercel publica direto do push para main, então sem isto nada separa um
+# commit quebrado da produção. O job repete exatamente os comandos da seção
+# "Verificações" do README, na mesma versão de Node que o build usa como alvo.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # O package.json exige >=24.16 e o esbuild compila com --target=node24.
+          # Fixar aqui evita que o CI passe numa versão que o deploy não usa.
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      # O build entra como verificação porque `build:api` gera o api/entry.js
+      # versionado: se ele quebrar, o deploy sobe uma função desatualizada.
+      - run: pnpm build
+
+      # A auditoria visual NÃO bloqueia: ela reporta 18 divergências conhecidas
+      # do SettingsPanel (DESIGN.md §11) e sai com código 1. Fazê-la obrigatória
+      # deixaria o CI vermelho de forma permanente, e um sinal que está sempre
+      # aceso deixa de ser sinal. Fica visível no log para não ser esquecida.
+      - run: pnpm design
+        continue-on-error: true

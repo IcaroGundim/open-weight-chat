@@ -615,7 +615,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 },
               }));
             }).catch(() => {
-              // A versÃ£o otimista jÃ¡ foi exibida; falhas de reconciliaÃ§Ã£o nÃ£o interrompem o chat.
+              // A versão otimista já foi exibida; falhas de reconciliação não interrompem o chat.
             });
           },
           onUsage: (usage) => updateAssistant((message) => ({
