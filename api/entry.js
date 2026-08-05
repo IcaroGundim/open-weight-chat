@@ -3535,6 +3535,11 @@ function getApp() {
 
 // src/server/vercel-handler.ts
 var maxDuration = 300;
+var config = {
+  api: {
+    bodyParser: false
+  }
+};
 function handler(request, response) {
   try {
     restoreRewrittenApiPath(request);
@@ -3564,6 +3569,7 @@ function writeStartupError(response, error) {
   return Promise.resolve();
 }
 export {
+  config,
   handler as default,
   maxDuration,
   restoreRewrittenApiPath

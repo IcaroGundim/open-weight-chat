@@ -7,6 +7,17 @@ import { errorPayload, normalizeError } from './errors';
 export const maxDuration = 300;
 
 /**
+ * A Vercel não pode consumir o JSON antes do adaptador do Hono. Sem isso,
+ * requisições PUT/POST chegam com o stream já esgotado e `c.req.json()` fica
+ * aguardando indefinidamente.
+ */
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+/**
  * Entrada da Function da Vercel.
  *
  * O build gera api/entry.js com esbuild e incorpora todos os módulos

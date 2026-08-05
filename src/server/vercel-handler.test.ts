@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import handler, { restoreRewrittenApiPath } from './vercel-handler';
+import handler, { config, restoreRewrittenApiPath } from './vercel-handler';
 import { createApp } from './index';
 
 const serverDir = dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,10 @@ describe('entrada da função na Vercel', () => {
     expect(typeof handler).toBe('function');
     expect(handler).toHaveLength(2);
     expect((handler as { fetch?: unknown }).fetch).toBeUndefined();
+  });
+
+  it('mantém o corpo bruto para o adaptador Node do Hono', () => {
+    expect(config).toEqual({ api: { bodyParser: false } });
   });
 
   it('escreve uma falha de configuração no res da API Route', async () => {
