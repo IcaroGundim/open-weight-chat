@@ -2,9 +2,26 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
-import handler, { config, restoreRewrittenApiPath } from './vercel-handler';
+import handler, { config, restoreRewrittenApiPath, requestWithRestoredBody } from './vercel-handler';
 import { createApp } from './index';
+
+/** Lê o corpo do jeito que o adaptador Node do Hono lê: Readable.toWeb(). */
+async function readAsHonoWould(incoming: IncomingMessage): Promise<string> {
+  return await new Response(Readable.toWeb(incoming) as ReadableStream).text();
+}
+
+/** IncomingMessage cujo stream a plataforma já drenou para popular `body`. */
+function consumedRequest(body: unknown, method = 'PUT'): IncomingMessage {
+  const drained = Readable.from([]) as unknown as IncomingMessage;
+  drained.headers = { 'content-type': 'application/json', host: 'exemplo.vercel.app' };
+  drained.rawHeaders = ['content-type', 'application/json', 'host', 'exemplo.vercel.app'];
+  drained.method = method;
+  drained.url = '/api/providers/openrouter';
+  (drained as IncomingMessage & { body?: unknown }).body = body;
+  return drained;
+}
 
 const serverDir = dirname(fileURLToPath(import.meta.url));
 
@@ -65,6 +82,44 @@ describe('entrada da função na Vercel', () => {
     const valueImport = /^import\s+(?!type\b)[^;]*from\s+'\.\/db\/queries'/mu;
     expect(source).not.toMatch(valueImport);
     expect(readFileSync(join(serverDir, 'main.ts'), 'utf8')).toMatch(/from '\.\/db\/queries'/u);
+  });
+
+  it('reconstrói o corpo que os helpers da Vercel consumiram', async () => {
+    // Sintoma que isto corrige: `c.req.json()` esperava para sempre por bytes
+    // que a plataforma já tinha lido, e o cadastro de provedor ficava preso em
+    // "Salvando e buscando…" até o maxDuration de 300s derrubar a Function.
+    const payload = { label: 'openrouter', baseURL: 'https://openrouter.ai/api/v1', apiKey: 'sk-teste' };
+
+    const restored = requestWithRestoredBody(consumedRequest(payload));
+
+    expect(JSON.parse(await readAsHonoWould(restored))).toEqual(payload);
+    expect(restored.headers['content-length']).toBe(String(Buffer.byteLength(JSON.stringify(payload))));
+    // Os metadados que o Hono usa para montar a Request Web sobrevivem à cópia.
+    expect(restored.method).toBe('PUT');
+    expect(restored.url).toBe('/api/providers/openrouter');
+    expect(restored.headers.host).toBe('exemplo.vercel.app');
+  });
+
+  it('aceita corpo entregue como string ou Buffer', async () => {
+    const raw = '{"label":"kimi"}';
+
+    expect(await readAsHonoWould(requestWithRestoredBody(consumedRequest(raw)))).toBe(raw);
+    expect(await readAsHonoWould(requestWithRestoredBody(consumedRequest(Buffer.from(raw))))).toBe(raw);
+  });
+
+  it('não toca na requisição quando o stream está intacto', () => {
+    // Sem `body`, a plataforma não consumiu nada: copiar seria desperdício e
+    // arriscaria perder o stream original do streaming SSE.
+    const intact = Readable.from([Buffer.from('{"a":1}')]) as unknown as IncomingMessage;
+    intact.method = 'POST';
+
+    expect(requestWithRestoredBody(intact)).toBe(intact);
+  });
+
+  it('não reconstrói corpo em métodos que não carregam corpo', () => {
+    const request = consumedRequest({}, 'GET');
+
+    expect(requestWithRestoredBody(request)).toBe(request);
   });
 
   it('explica a falta de DATABASE_URL em vez de cair no SQLite', () => {

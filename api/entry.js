@@ -1,5 +1,6 @@
 // src/server/vercel-handler.ts
 import { handle } from "@hono/node-server/vercel";
+import { Readable } from "node:stream";
 
 // src/server/index.ts
 import { existsSync } from "node:fs";
@@ -3519,10 +3520,30 @@ var config = {
 function handler(request, response) {
   try {
     restoreRewrittenApiPath(request);
-    return handle(getApp())(request, response).catch((error) => writeStartupError(response, error));
+    const incoming = requestWithRestoredBody(request);
+    return handle(getApp())(incoming, response).catch((error) => writeStartupError(response, error));
   } catch (error) {
     return writeStartupError(response, error);
   }
+}
+var BODYLESS_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "DELETE", "OPTIONS"]);
+function requestWithRestoredBody(request) {
+  const parsed = request.body;
+  if (parsed === void 0 || parsed === null) return request;
+  if (BODYLESS_METHODS.has((request.method ?? "GET").toUpperCase())) return request;
+  const raw = Buffer.isBuffer(parsed) ? parsed : typeof parsed === "string" ? Buffer.from(parsed, "utf8") : Buffer.from(JSON.stringify(parsed), "utf8");
+  const restored = Readable.from(raw.byteLength > 0 ? [raw] : []);
+  const headers = { ...request.headers, "content-length": String(raw.byteLength) };
+  delete headers["transfer-encoding"];
+  restored.headers = headers;
+  restored.rawHeaders = request.rawHeaders;
+  restored.method = request.method;
+  restored.url = request.url;
+  restored.httpVersion = request.httpVersion;
+  restored.httpVersionMajor = request.httpVersionMajor;
+  restored.httpVersionMinor = request.httpVersionMinor;
+  restored.socket = request.socket;
+  return restored;
 }
 function restoreRewrittenApiPath(request) {
   if (!request.url) return;
@@ -3548,5 +3569,6 @@ export {
   config,
   handler as default,
   maxDuration,
+  requestWithRestoredBody,
   restoreRewrittenApiPath
 };

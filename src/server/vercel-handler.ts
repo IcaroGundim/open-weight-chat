@@ -1,5 +1,6 @@
 import { handle } from '@hono/node-server/vercel';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { Readable } from 'node:stream';
 import { getApp } from './index';
 import { errorPayload, normalizeError } from './errors';
 
@@ -7,9 +8,14 @@ import { errorPayload, normalizeError } from './errors';
 export const maxDuration = 300;
 
 /**
- * A Vercel não pode consumir o JSON antes do adaptador do Hono. Sem isso,
- * requisições PUT/POST chegam com o stream já esgotado e `c.req.json()` fica
- * aguardando indefinidamente.
+ * Pedido para a plataforma não consumir o JSON antes do adaptador do Hono.
+ *
+ * ATENÇÃO: isto sozinho não basta. `config.api.bodyParser` é uma convenção do
+ * Next.js; uma Function Node avulsa como esta (gerada por esbuild, sem Next.js
+ * no projeto) NÃO tem esse export honrado pela Vercel, que aplica os helpers
+ * de request e popula `req.body` de qualquer maneira. O export continua aqui
+ * porque é inofensivo e cobre plataformas que o respeitem — mas a garantia real
+ * é `requestWithRestoredBody`, abaixo.
  */
 export const config = {
   api: {
@@ -30,10 +36,56 @@ export const config = {
 export default function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
   try {
     restoreRewrittenApiPath(request);
-    return handle(getApp())(request, response).catch((error) => writeStartupError(response, error));
+    const incoming = requestWithRestoredBody(request);
+    return handle(getApp())(incoming, response).catch((error) => writeStartupError(response, error));
   } catch (error) {
     return writeStartupError(response, error);
   }
+}
+
+/** Métodos que nunca carregam corpo — nada a restaurar. */
+const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE', 'OPTIONS']);
+
+/**
+ * Devolve um IncomingMessage cujo stream ainda pode ser lido.
+ *
+ * Os request helpers da Vercel leem o stream para popular `req.body`. O
+ * adaptador Node do Hono monta a Request Web com `Readable.toWeb(incoming)`,
+ * então um stream já drenado vira um corpo que nunca chega: `c.req.json()`
+ * aguarda para sempre, sem timeout, e a Function só morre no maxDuration de
+ * 300s. Na interface isso aparecia como "Salvando e buscando…" eterno ao
+ * cadastrar a chave de um provedor.
+ *
+ * A presença de `req.body` é o sinal de que a plataforma já consumiu o stream
+ * (IncomingMessage não tem essa propriedade). Quando ela existe, reconstruímos
+ * o corpo em um Readable novo e copiamos os metadados HTTP que o Hono lê.
+ * Quando não existe, o stream está intacto e o pedido segue sem cópia.
+ */
+export function requestWithRestoredBody(request: IncomingMessage): IncomingMessage {
+  const parsed = (request as IncomingMessage & { body?: unknown }).body;
+  if (parsed === undefined || parsed === null) return request;
+  if (BODYLESS_METHODS.has((request.method ?? 'GET').toUpperCase())) return request;
+
+  const raw = Buffer.isBuffer(parsed)
+    ? parsed
+    : typeof parsed === 'string'
+      ? Buffer.from(parsed, 'utf8')
+      : Buffer.from(JSON.stringify(parsed), 'utf8');
+
+  const restored = Readable.from(raw.byteLength > 0 ? [raw] : []) as unknown as IncomingMessage;
+  // `transfer-encoding` sai de cena: o corpo reconstruído tem tamanho conhecido
+  // e anunciar chunked junto com content-length deixaria a Request ambígua.
+  const headers = { ...request.headers, 'content-length': String(raw.byteLength) };
+  delete headers['transfer-encoding'];
+  restored.headers = headers;
+  restored.rawHeaders = request.rawHeaders;
+  restored.method = request.method;
+  restored.url = request.url;
+  restored.httpVersion = request.httpVersion;
+  restored.httpVersionMajor = request.httpVersionMajor;
+  restored.httpVersionMinor = request.httpVersionMinor;
+  restored.socket = request.socket;
+  return restored;
 }
 
 /**
