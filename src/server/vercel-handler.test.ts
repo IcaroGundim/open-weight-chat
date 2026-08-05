@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import handler from './vercel-handler';
 import { createApp } from './index';
@@ -12,12 +13,35 @@ afterEach(() => {
 });
 
 describe('entrada da função na Vercel', () => {
-  it('exporta uma função, não um objeto com fetch', () => {
-    // A versão anterior exportava `{ fetch }` — convenção de Workers/Bun/Deno.
-    // A Vercel não a reconhece e devolvia FUNCTION_INVOCATION_FAILED em toda
-    // requisição a /api/*, antes de qualquer roteamento.
+  it('exporta uma função Node (req, res), não uma Response Web', () => {
+    // API Routes da Vercel invocam a exportação padrão com req/res. Retornar
+    // uma Response dela gera um warning e a resposta é ignorada.
     expect(typeof handler).toBe('function');
+    expect(handler).toHaveLength(2);
     expect((handler as { fetch?: unknown }).fetch).toBeUndefined();
+  });
+
+  it('escreve uma falha de configuração no res da API Route', async () => {
+    const written: { status?: number; type?: string; body?: string } = {};
+    const response = {
+      headersSent: false,
+      writableEnded: false,
+      setHeader: (name: string, value: string) => {
+        if (name === 'content-type') written.type = value;
+      },
+      end: (body: string) => {
+        written.body = body;
+      },
+      set statusCode(value: number) {
+        written.status = value;
+      },
+    } as unknown as ServerResponse;
+
+    await handler({} as IncomingMessage, response);
+
+    expect(written.status).toBe(500);
+    expect(written.type).toContain('application/json');
+    expect(written.body).toContain('DATABASE_URL');
   });
 
   it('não arrasta node:sqlite para o grafo de módulos da função', () => {

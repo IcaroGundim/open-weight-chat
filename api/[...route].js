@@ -1,3 +1,6 @@
+// src/server/vercel-handler.ts
+import { handle } from "@hono/node-server/vercel";
+
 // src/server/index.ts
 import { existsSync } from "node:fs";
 import { join as join3 } from "node:path";
@@ -3532,16 +3535,22 @@ function getApp() {
 
 // src/server/vercel-handler.ts
 var maxDuration = 300;
-async function handler(request) {
+function handler(request, response) {
   try {
-    return await getApp().fetch(request);
+    return handle(getApp())(request, response).catch((error) => writeStartupError(response, error));
   } catch (error) {
-    const normalized = normalizeError(error);
-    return new Response(JSON.stringify({ error: errorPayload(normalized) }), {
-      status: normalized.status,
-      headers: { "content-type": "application/json; charset=utf-8" }
-    });
+    return writeStartupError(response, error);
   }
+}
+function writeStartupError(response, error) {
+  if (response.writableEnded) return Promise.resolve();
+  const normalized = normalizeError(error);
+  if (!response.headersSent) {
+    response.statusCode = normalized.status;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+  }
+  response.end(JSON.stringify({ error: errorPayload(normalized) }));
+  return Promise.resolve();
 }
 export {
   handler as default,
