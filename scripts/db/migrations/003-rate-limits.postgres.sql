@@ -1,9 +1,8 @@
 -- Migração 003 — tabelas de rate limit por usuário (Postgres / Neon).
 --
 -- Contadores de janela fixa de 60s e slots de stream ativo, compartilhados
--- entre instâncias (ver src/server/rate-limit.ts — em runtime o store cria
--- com CREATE TABLE IF NOT EXISTS; aqui ficam versionadas para o
--- pnpm db:migrate, idempotente sobre bancos que já as têm).
+-- entre instâncias (ver src/server/rate-limit.ts). O schema fica versionado
+-- aqui e é aplicado com pnpm db:migrate antes do deploy.
 
 CREATE TABLE IF NOT EXISTS rate_limit_counters (
   bucket text NOT NULL,

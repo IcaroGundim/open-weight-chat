@@ -2561,33 +2561,10 @@ var InMemoryRateLimitStore = class {
 };
 var NeonRateLimitStore = class {
   sql;
-  ready;
   constructor(connectionString, sql = neon2(connectionString)) {
     this.sql = sql;
-    this.ready = this.migrate();
-  }
-  async migrate() {
-    const statements = [
-      `CREATE TABLE IF NOT EXISTS rate_limit_counters (
-        bucket text NOT NULL,
-        user_id text NOT NULL,
-        count integer NOT NULL,
-        window_start bigint NOT NULL,
-        PRIMARY KEY (bucket, user_id, window_start)
-      )`,
-      `CREATE TABLE IF NOT EXISTS rate_limit_streams (
-        id text NOT NULL,
-        user_id text NOT NULL,
-        started_at bigint NOT NULL,
-        last_active bigint NOT NULL,
-        PRIMARY KEY (id)
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_rate_limit_streams_user ON rate_limit_streams(user_id, started_at)`
-    ];
-    await this.sql.transaction(statements.map((statement) => this.sql.query(statement)));
   }
   async rows(query, params = []) {
-    await this.ready;
     return await this.sql.query(query, params);
   }
   async increment(bucket, userId, limit, message2) {
@@ -2610,7 +2587,6 @@ var NeonRateLimitStore = class {
     await this.increment("discovery", userId, MODEL_DISCOVERY_LIMIT_PER_MINUTE, MODEL_DISCOVERY_LIMIT_MESSAGE);
   }
   async acquireStreamSlot(userId) {
-    await this.ready;
     const now = Date.now();
     const slotId = randomUUID2();
     const results = await this.sql.transaction([

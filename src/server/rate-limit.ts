@@ -13,8 +13,7 @@ import type { ChatDatabaseAdapter } from './db/database';
  * instâncias da Vercel; as implementações SQLite e InMemory existem para
  * desenvolvimento local e testes.
  *
- * Tabelas (criadas com CREATE TABLE IF NOT EXISTS no construtor de cada store
- * — idempotente; serão incluídas nas migrações versionadas depois):
+ * Tabelas (criadas pela migração versionada 003 antes do deploy):
  *
  *   CREATE TABLE IF NOT EXISTS rate_limit_counters (
  *     bucket text NOT NULL,
@@ -25,10 +24,11 @@ import type { ChatDatabaseAdapter } from './db/database';
  *   );
  *
  *   CREATE TABLE IF NOT EXISTS rate_limit_streams (
+ *     id text NOT NULL,
  *     user_id text NOT NULL,
  *     started_at bigint NOT NULL,
  *     last_active bigint NOT NULL,
- *     PRIMARY KEY (user_id, started_at)
+ *     PRIMARY KEY (id)
  *   );
  *
  * Janela fixa de 60s: `window_start = Math.floor(now/60000) * 60000` e o bucket
@@ -149,41 +149,17 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 
 /**
  * Implementação Postgres (Neon): contadores atômicos e compartilhados entre
- * as instâncias da Vercel. O construtor cria as tabelas (idempotente) e as
- * migrações versionadas futuras usarão o mesmo SQL.
+ * as instâncias da Vercel. O schema é responsabilidade da migração 003;
+ * nunca fazemos DDL no caminho de uma requisição serverless.
  */
 export class NeonRateLimitStore implements RateLimitStore {
   private readonly sql: ReturnType<typeof neon>;
-  private readonly ready: Promise<void>;
 
   constructor(connectionString: string, sql: ReturnType<typeof neon> = neon(connectionString)) {
     this.sql = sql;
-    this.ready = this.migrate();
-  }
-
-  private async migrate(): Promise<void> {
-    const statements = [
-      `CREATE TABLE IF NOT EXISTS rate_limit_counters (
-        bucket text NOT NULL,
-        user_id text NOT NULL,
-        count integer NOT NULL,
-        window_start bigint NOT NULL,
-        PRIMARY KEY (bucket, user_id, window_start)
-      )`,
-      `CREATE TABLE IF NOT EXISTS rate_limit_streams (
-        id text NOT NULL,
-        user_id text NOT NULL,
-        started_at bigint NOT NULL,
-        last_active bigint NOT NULL,
-        PRIMARY KEY (id)
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_rate_limit_streams_user ON rate_limit_streams(user_id, started_at)`,
-    ];
-    await this.sql.transaction(statements.map((statement) => this.sql.query(statement)));
   }
 
   private async rows(query: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-    await this.ready;
     return await this.sql.query(query, params) as Record<string, unknown>[];
   }
 
@@ -212,7 +188,6 @@ export class NeonRateLimitStore implements RateLimitStore {
   }
 
   async acquireStreamSlot(userId: string): Promise<StreamSlotId> {
-    await this.ready;
     const now = Date.now();
     const slotId = randomUUID();
     const results = await this.sql.transaction([

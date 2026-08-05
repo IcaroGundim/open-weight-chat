@@ -156,4 +156,24 @@ describe('rate limits por usuário', () => {
       params: ['user_a', firstSlot, expect.any(Number)],
     });
   });
+
+  it('Neon não executa DDL antes de limitar a descoberta de modelos', async () => {
+    const queries: string[] = [];
+    const fakeSql = {
+      query: (sql: string) => {
+        queries.push(sql);
+        return Promise.resolve([{ count: 1 }]);
+      },
+      transaction: () => {
+        throw new Error('DDL não deve rodar em uma requisição');
+      },
+    };
+    const store = new NeonRateLimitStore('postgres://unused', fakeSql as unknown as ReturnType<typeof neon>);
+
+    await store.checkModelDiscovery('user_a');
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain('INSERT INTO rate_limit_counters');
+    expect(queries[0]).not.toContain('CREATE TABLE');
+  });
 });
