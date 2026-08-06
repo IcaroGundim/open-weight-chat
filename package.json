@@ -27,6 +27,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "@shikijs/langs": "^3.23.0",
     "@shikijs/themes": "^3.23.0",
+    "@usefragments/ui": "^1.6.0",
     "hono": "^4.9.7",
     "katex": "^0.16.22",
     "lucide-react": "^0.468.0",

@@ -1,8 +1,21 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ClerkProvider } from '@clerk/react';
+import { configureTheme } from '@usefragments/ui';
+import '@usefragments/ui/styles';
 import { AuthenticatedApp } from './auth';
 import './styles.css';
+
+// Seeds globais da @usefragments/ui a partir de --wine (DESIGN.md), para
+// qualquer componente da biblioteca nascer com o acento e o raio do projeto
+// em vez do azul padrão. Não passe `neutral`: nesta versão (1.6.0),
+// configureTheme() lê brand/density/radiusStyle mas nunca lê `neutral`
+// (dist/components/Theme/index.js) — passá-lo é inofensivo, mas não faz
+// nada, e fica lendo como se semeasse a paleta neutra sem semear. Os
+// componentes usados na tela de login recebem, além disso, um ajuste fino
+// por CSS em styles.css porque vivem sobre o painel escuro (--sidebar-bg),
+// não sobre --paper — é esse CSS, não este seed, que garante a cor ali.
+configureTheme({ brand: '#7a2338', radiusStyle: 'subtle' });
 
 // Publishable key do Clerk (pública por definição). Em dev, defina no .env.local:
 //   VITE_CLERK_PUBLISHABLE_KEY=pk_test_...

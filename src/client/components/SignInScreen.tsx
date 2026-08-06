@@ -1,4 +1,5 @@
 import { SignIn } from '@clerk/react';
+import { Badge, Card } from '@usefragments/ui';
 import { ArrowRight, Brain, Coins, Gauge, Scan, ShieldCheck } from 'lucide-react';
 
 /**
@@ -61,7 +62,7 @@ export function SignInScreen() {
             ))}
           </ul>
 
-          <div className="login-meter" aria-label="Exemplo de ficha de modelo">
+          <Card variant="stat" padding="md" className="login-meter" aria-label="Exemplo de ficha de modelo">
             <p className="login-meter-label">Ficha de modelo</p>
             <p className="login-meter-name">DeepSeek V4 Flash</p>
             <dl className="login-meter-grid">
@@ -83,11 +84,13 @@ export function SignInScreen() {
               </div>
             </dl>
             <p className="login-meter-note">Valores ilustrativos — o catálogo real vem do servidor após o login.</p>
-          </div>
+          </Card>
 
           <ul className="login-providers" aria-label="Provedores suportados">
             {PROVIDERS.map((name) => (
-              <li key={name} className="login-provider">{name}</li>
+              <li key={name}>
+                <Badge variant="outline" size="sm">{name}</Badge>
+              </li>
             ))}
           </ul>
 

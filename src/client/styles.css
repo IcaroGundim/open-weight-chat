@@ -1783,7 +1783,12 @@ kbd {
   background: var(--paper);
 }
 
-/* Painel de marca — mesma casca da barra lateral, nos dois temas. */
+/* Painel de marca — mesma casca da barra lateral, nos dois temas.
+ *
+ * As variáveis --fui-* vestem a @usefragments/ui: a biblioteca expõe
+ * primitivas de tema; apontar cada uma para o token correspondente do
+ * painel escuro alinha Card e Badge sem combater classes internas nem
+ * duplicar cor em hexadecimal literal — mesmo padrão do Clerk logo abaixo. */
 .login-panel {
   background: var(--sidebar-bg);
   color: var(--sidebar-ink);
@@ -1792,6 +1797,16 @@ kbd {
   padding: 56px clamp(28px, 5vw, 80px);
   position: relative;
   overflow: hidden;
+  --fui-font-sans: var(--sans);
+  --fui-text-primary: var(--sidebar-ink);
+  --fui-text-secondary: var(--sidebar-ink-2);
+  --fui-text-tertiary: var(--sidebar-ink-2);
+  --fui-border-default: var(--sidebar-rule);
+  --fui-border-subtle: var(--sidebar-rule);
+  --fui-border-strong: var(--sidebar-rule);
+  --fui-card-stat-bg: transparent;
+  --fui-card-stat-border: var(--sidebar-rule);
+  --fui-card-stat-shadow: none;
 }
 /* Textura de ruído sutil (mesma técnica do hermes-agent.nousresearch.com):
    um SVG de ruído fractal em blend screen, sem gradiente e sem peso. */
@@ -1872,11 +1887,11 @@ kbd {
   color: var(--sidebar-ink-2);
 }
 
-/* Ficha de modelo — a peça que carrega a tese (§7.4), como vitrine. */
+/* Ficha de modelo — a peça que carrega a tese (§7.4), como vitrine.
+ * O cartão em si (borda, raio, preenchimento, zero sombra) vem do
+ * Card variant="stat" da @usefragments/ui; aqui só resta o espaçamento
+ * externo, que é decisão de layout desta tela, não do componente. */
 .login-meter {
-  border: 1px solid var(--sidebar-rule);
-  border-radius: var(--r-3);
-  padding: 16px 18px;
   margin: 0 0 32px;
 }
 .login-meter-label {
@@ -1916,7 +1931,8 @@ kbd {
   margin: 12px 0 0;
 }
 
-/* Chips de provedores — borda em currentColor, como no site da Nous. */
+/* Chips de provedores — Badge variant="outline" da @usefragments/ui, com a
+ * borda e o texto vestidos pelos tokens --fui-* logo abaixo. */
 .login-providers {
   display: flex;
   flex-wrap: wrap;
@@ -1924,17 +1940,6 @@ kbd {
   list-style: none;
   padding: 0;
   margin: 0 0 32px;
-}
-.login-provider {
-  font-size: 13px;
-  color: var(--sidebar-ink-2);
-  border: 1px solid var(--sidebar-rule);
-  border-radius: var(--r-2);
-  padding: 6px 10px;
-}
-.login-provider:hover {
-  border-color: var(--sidebar-wine);
-  color: var(--sidebar-wine);
 }
 .login-panel-foot {
   font-size: 13px;
