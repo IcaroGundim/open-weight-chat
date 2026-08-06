@@ -26,20 +26,22 @@ export type AgentActivity =
   | 'compilando';
 
 const ACTIVITY_STATE: Record<AgentActivity, OrbState> = {
-  // Anel de face inteira em morfologia lenta: presença calma, que não disputa
-  // atenção com o texto que está sendo transmitido ao lado.
-  pensando: 'breathing',
+  // Meridiano de varredura percorrendo o globo — é o indicador mais visto do
+  // app (aparece a cada resposta), então fica com o desenho de maior
+  // destaque em vez de dividi-lo com um estado periférico.
+  pensando: 'searching',
   // Contorno pontilhado que se remodela — a leitura de "tomando forma" é
-  // literal, e casa com o artefato crescendo no painel.
+  // literal, e casa com o artefato crescendo no painel. Já é distinto do
+  // globo de `pensando`, então os dois nunca se confundem lado a lado.
   construindo: 'shaping',
   // Faixas que se embaralham e voltam a encaixar. Revisar um artefato é
   // exatamente isso: o texto existente se desmancha nos trechos trocados e
   // assenta de novo. Distinguir de `construindo` informa, antes do diff, que
   // nada está sendo escrito do zero.
   revisando: 'solving',
-  // Meridiano de varredura percorrendo o globo: a metáfora de busca já é a do
-  // próprio desenho.
-  buscando: 'searching',
+  // Anel de face inteira em morfologia lenta: presença calma, que não disputa
+  // atenção com o resto da tela de configurações enquanto o catálogo carrega.
+  buscando: 'breathing',
   // Constelação que se cabeia sozinha, com pacotes correndo pelas arestas —
   // a imagem de uma sessão sendo estabelecida.
   conectando: 'connecting',
