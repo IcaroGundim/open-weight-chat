@@ -13,3 +13,5 @@ chat.db-wal
 
 # provedores personalizados: pode conter endpoints privados
 providers.local.json
+.vercel
+.env*
