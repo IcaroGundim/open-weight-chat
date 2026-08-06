@@ -1836,9 +1836,24 @@ kbd {
   --fui-text-primary: var(--sidebar-ink);
   --fui-text-secondary: var(--sidebar-ink-2);
   --fui-text-tertiary: var(--sidebar-ink-2);
+  /* `--fui-border` (sem sufixo) é o que Prompt e ThinkingIndicator leem;
+     os três com sufixo são de Card e Badge. Faltando o primeiro, a borda
+     do campo de entrada volta ao preto translúcido padrão da biblioteca. */
+  --fui-border: var(--sidebar-rule);
   --fui-border-default: var(--sidebar-rule);
   --fui-border-subtle: var(--sidebar-rule);
   --fui-border-strong: var(--sidebar-rule);
+  --fui-bg-elevated: var(--sidebar-2);
+  --fui-bg-secondary: var(--sidebar-2);
+  --fui-bg-subtle: var(--sidebar-2);
+  --fui-bg-tertiary: var(--sidebar-hover);
+  --fui-bg-hover: var(--sidebar-hover);
+  /* O acento pinta o feixe do campo e o passo ativo do raciocínio. Vinho da
+     barra lateral, não o verde-azulado padrão da biblioteca (§3.3.1). */
+  --fui-color-accent: var(--sidebar-wine);
+  /* DESIGN.md §6.3: uma sombra só, e ela é de overlay. Aqui, nenhuma. */
+  --fui-shadow-md: none;
+  --fui-shadow-lg: none;
   --fui-card-stat-bg: transparent;
   --fui-card-stat-border: var(--sidebar-rule);
   --fui-card-stat-shadow: none;
@@ -1883,87 +1898,85 @@ kbd {
   max-width: 46ch;
 }
 
-/* "O que a bancada mede" — três recursos com ícone em caixa de borda. */
-.login-features {
-  list-style: none;
-  padding: 0;
+/* Prévia viva do produto (§3.3, §12): mensagem, raciocínio, custo medido e
+   campo de entrada com o feixe animado. Substituiu a lista de recursos e a
+   ficha estática — os três argumentos aparecem funcionando em vez de
+   descritos. Os componentes vêm da @usefragments/ui; o que está aqui é só o
+   ritmo entre eles e o que os tokens --fui-* do painel não alcançam. */
+.login-preview {
   margin: 0 0 32px;
   display: grid;
-  gap: 16px;
+  gap: 10px;
 }
-.login-feature {
+/* Ilustração: nada aqui recebe foco nem clique. O atributo `inert` no JSX já
+   tira do teclado; isto cobre o ponteiro e o cursor de texto. */
+.login-preview,
+.login-preview * {
+  pointer-events: none;
+  user-select: none;
+}
+.login-preview-message {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.login-preview-thinking {
+  margin: 2px 0;
+  display: grid;
+  gap: 6px;
+}
+.login-preview-thinking-head {
   display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-.login-feature-icon {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  color: var(--sidebar-wine);
-  border: 1px solid var(--sidebar-rule);
-  border-radius: var(--r-2);
-}
-.login-feature-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.login-feature-body strong {
-  font: 600 14px/1.3 var(--sans);
-  color: var(--sidebar-ink);
-}
-.login-feature-body span {
-  font-size: 13px;
-  line-height: 1.45;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
   color: var(--sidebar-ink-2);
 }
 
-/* Ficha de modelo — a peça que carrega a tese (§7.4), como vitrine.
- * O cartão em si (borda, raio, preenchimento, zero sombra) vem do
- * Card variant="stat" da @usefragments/ui; aqui só resta o espaçamento
- * externo, que é decisão de layout desta tela, não do componente. */
-.login-meter {
-  margin: 0 0 32px;
-}
-.login-meter-label {
-  font-size: 12px;
-  color: var(--sidebar-ink-2);
-  margin: 0 0 6px;
-}
-.login-meter-name {
-  font: 600 17px/1.2 var(--display);
-  color: var(--sidebar-ink);
-  margin: 0 0 14px;
-}
-.login-meter-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin: 0;
-}
-.login-meter-grid > div {
+/* Custo — o argumento central da bancada. Mono e tabular porque é valor
+   medido (§5.3), e em vinho porque custo é sinalização (§4.4). */
+.login-preview-cost {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.login-meter-grid dt {
-  font-size: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 0 6px;
+  padding: 0 2px;
+  font-size: 13px;
   color: var(--sidebar-ink-2);
 }
-.login-meter-grid dd {
-  font: 500 13px/1.2 var(--mono);
-  font-variant-numeric: tabular-nums;
+.login-preview-cost strong {
   color: var(--sidebar-wine);
-  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
-.login-meter-note {
-  font-size: 12px;
+
+/* O feixe cônico da biblioteca é invisível por construção: o componente tem
+   `overflow: hidden` e uma borda sólida de 1px, e o anel por onde o gradiente
+   passa é justamente o que essa borda cobre. Deixar a borda transparente
+   devolve o anel ao feixe; a cor de base atrás do gradiente mantém a caixa
+   desenhada nos trechos do giro em que o feixe não está passando. */
+.login-preview-prompt {
+  font-size: 14px;
+  border-color: transparent;
+}
+.login-preview-prompt::before {
+  background-color: var(--sidebar-rule);
+  opacity: 1;
+}
+/* O anel de 1px que a biblioteca deixa é fino demais para o feixe registrar;
+   2px é o mínimo em que ele se lê sem virar moldura. */
+.login-preview-prompt::after {
+  inset: 2px;
+}
+.login-preview-model {
   color: var(--sidebar-ink-2);
-  margin: 12px 0 0;
+  font-size: 13px;
+}
+.login-preview-ctx {
+  color: var(--sidebar-ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Chips de provedores — Badge variant="outline" da @usefragments/ui, com a
@@ -2135,12 +2148,13 @@ kbd {
   .login-panel-text {
     margin-bottom: 20px;
   }
-  .login-features,
-  .login-meter {
+  /* Empilhado, o painel vira cabeçalho do cartão de acesso: a prévia sai
+     para o formulário não nascer abaixo da dobra. */
+  .login-preview {
     display: none;
   }
   .login-providers {
-    margin-bottom: 0;
+    margin-bottom: 12px;
   }
   .login-main {
     padding: 32px 24px 48px;

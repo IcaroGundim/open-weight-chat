@@ -38,7 +38,7 @@ Isto não é um app de conversa de consumo. É uma **bancada com medidor**: voc�
 
 | Regra | Motivo |
 |---|---|
-| Gradientes (`linear-gradient`, `radial-gradient`) | Tell nº 1 de slop; nenhuma função aqui |
+| ~~Gradientes (`linear-gradient`, `radial-gradient`)~~ | **Revogado em 05/08/2026 — ver §3.3.** Continua proibido como preenchimento decorativo de fundo, que é a forma do tell |
 | `Inter` nomeada na pilha de fontes | Tell nº 2; a pilha de sistema resolve melhor e pesa zero |
 | Mono para rótulos, títulos, botões ou eyebrows | Mono só mede — ver §2 |
 | `text-transform: uppercase` com `letter-spacing` | O tique da segunda geração |
@@ -48,7 +48,7 @@ Isto não é um app de conversa de consumo. É uma **bancada com medidor**: voc�
 | Sombra colorida, glassmorphism, `backdrop-filter` | — |
 | `window.alert` / `prompt` / `confirm` | Diálogo nativo é o tell mais alto de UI inacabada |
 | Cor literal fora dos tokens | Se não é variável, não entra (exceção única em §9.3) |
-| Framework de CSS ou biblioteca de componentes | shadcn/Tailwind trazem defaults que *são* a assinatura do slop |
+| ~~Framework de CSS ou biblioteca de componentes~~ | **Revogado em 05/08/2026 — ver §3.3** |
 
 ### 3.2 Obrigatório
 
@@ -61,6 +61,20 @@ Isto não é um app de conversa de consumo. É uma **bancada com medidor**: voc�
 - **Uma sombra só** (`--shadow`), exclusiva de overlay e barra lateral móvel.
 - **Contraste verificado por cálculo**, não por olho. Mínimos em §10.
 - **Todo rótulo de atalho corresponde a um atalho real.** Um `<kbd>` que mente é pior que sua ausência.
+
+### 3.3 Revogação de 05/08/2026 — biblioteca de componentes e gradientes
+
+Duas linhas da §3.1 foram revogadas por decisão do dono do produto: **biblioteca de componentes** e **gradientes**. O `@usefragments/ui` (construído sobre a Base UI headless) passa a ser permitido, e com ele o efeito de feixe cônico animado do componente `Prompt`.
+
+O motivo é de produto, não de estética: a tela de login é o primeiro contato, e a decisão foi trocar sobriedade por impacto ali. A Base UI ainda entrega foco, papéis ARIA e teclado prontos — o que a §3.1 tratava como custo é, nessa camada, benefício.
+
+**O que a revogação não anula**, porque é a tese e não a regra:
+
+1. **A identidade continua sendo a daqui.** Os componentes da biblioteca são vestidos com os tokens do projeto pelas variáveis `--fui-*` — nunca com o acento, a fonte ou o raio padrão dela. `Inter` na pilha de fontes segue proibido.
+2. **Gradiente como efeito, não como preenchimento.** O feixe animado marca um estado (o campo de entrada, vivo). Fundo de seção em `linear-gradient` roxo→azul continua sendo o tell nº 1, e continua fora.
+3. **A §13.5 não mudou.** Se a tela ficaria idêntica em qualquer outro app de chat, ela ainda não tem decisão dentro.
+
+Escopo: a tela de login. Levar a biblioteca para dentro do chat é outra decisão, e deve ser registrada aqui do mesmo jeito.
 
 ---
 
@@ -336,6 +350,8 @@ O que cada escolha substituiu, e por quê. Serve para não refazer o caminho.
 | `<pre>` com padding somado ao do `<code>` | `padding: 0` no `pre` | 13px + 13px = 26px só no caminho destacado |
 | Lateral `#120E0C` no escuro | Mesmo marrom nos dois temas | Ela sumia contra o canvas — ver §4.3 |
 | Prosa e código ambos em 74ch | Prosa em 72ch, código e tabelas em largura cheia | Estreitar código não ajuda ninguém a ler |
+| Ficha de modelo estática na tela de login | Prévia viva do produto: mensagem, raciocínio e campo de entrada com feixe | Descrever a bancada convence menos que mostrá-la funcionando — ver §3.3 |
+| Biblioteca de componentes e gradiente proibidos | `@usefragments/ui` permitido, vestido com os tokens daqui | Decisão de produto de 05/08/2026: impacto no primeiro contato; a Base UI ainda dá acessibilidade de graça — ver §3.3 |
 
 ---
 

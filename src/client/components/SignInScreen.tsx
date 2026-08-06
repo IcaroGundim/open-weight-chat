@@ -1,37 +1,33 @@
 import { SignIn } from '@clerk/react';
-import { Badge, Card } from '@usefragments/ui';
-import { ArrowRight, Brain, Coins, Gauge, Scan, ShieldCheck } from 'lucide-react';
+import { Badge, Message, Prompt, ThinkingIndicator } from '@usefragments/ui';
+import { ArrowRight, ArrowUp, Gauge, ShieldCheck } from 'lucide-react';
+import { AgentOrb } from './AgentOrb';
 
 /**
  * Tela exibida quando não há sessão (<SignedOut />).
  *
- * Identidade Hermes (DESIGN.md §4.5): o painel de marca usa a linha visual do
- * Hermes Agent / Nous Research — bloco de azul elétrico sólido, acento
- * amarelo-limão, off-white como tinta, tipografia display grande e leve,
- * chips com borda e textura de ruído. Sem gradientes, sem sombras, sem
- * caixa alta — a paleta é a própria decisão, não a média.
+ * Identidade Hermes (DESIGN.md §4.5): o painel de marca usa a casca escura da
+ * barra lateral, acento vinho, off-white como tinta, display grande e leve, e
+ * a textura de ruído — a paleta é a própria decisão, não a média.
  *
- * A ficha de modelo (§7.4, "a peça que carrega a tese") vira vitrine do que
- * o usuário vai medir. Mono é usado só para valores medidos (§5.3).
+ * O miolo do painel é uma **prévia viva do produto**, e não uma lista de
+ * recursos: os três argumentos da bancada aparecem funcionando em vez de
+ * descritos — o raciocínio como passos, o custo como valor medido em mono
+ * (§5.3) e a janela de contexto no rodapé do campo. Substituiu a ficha de
+ * modelo estática; a decisão está registrada em §3.3 e no histórico da §12.
+ *
+ * A espera usa o `AgentOrb` do próprio app, não o indicador da biblioteca:
+ * o orb é a linguagem de espera daqui e aparece em todas as outras telas —
+ * trocá-lo por três pontos genéricos seria exatamente o que a §13.5 proíbe.
+ * Os passos ao lado vêm de `ThinkingIndicator.Steps`, que é presentacional e
+ * funciona fora do componente-pai.
  */
 const PROVIDERS = ['DeepSeek', 'GLM', 'Kimi', 'OpenRouter', 'Ollama'];
 
-const FEATURES = [
-  {
-    icon: Coins,
-    title: 'Custo por mensagem',
-    text: 'Cada resposta mostra o valor exato, em vez de um saldo opaco.',
-  },
-  {
-    icon: Scan,
-    title: 'Janela de contexto',
-    text: 'O histórico é cortado pelo tamanho real do modelo selecionado.',
-  },
-  {
-    icon: Brain,
-    title: 'Raciocínio visível',
-    text: 'Modelos de raciocínio mostram o pensamento antes da resposta.',
-  },
+const THINKING_STEPS = [
+  { id: 'ler', label: 'Lendo o catálogo do provedor', status: 'complete' as const },
+  { id: 'comparar', label: 'Comparando preço por token', status: 'complete' as const },
+  { id: 'medir', label: 'Somando o custo da resposta', status: 'active' as const },
 ];
 
 export function SignInScreen() {
@@ -48,43 +44,61 @@ export function SignInScreen() {
             Escolha o provedor, traga a sua chave, leia a resposta — e veja exatamente o que cada mensagem custou.
           </p>
 
-          <ul className="login-features" aria-label="O que a bancada mede">
-            {FEATURES.map((feature) => (
-              <li key={feature.title} className="login-feature">
-                <span className="login-feature-icon" aria-hidden="true">
-                  <feature.icon size={16} strokeWidth={2} />
-                </span>
-                <span className="login-feature-body">
-                  <strong>{feature.title}</strong>
-                  <span>{feature.text}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* A prévia abaixo é `inert` + `aria-hidden`: sai do teclado e da árvore
+              de acessibilidade, porque ler uma conversa encenada confunde. O que
+              ela demonstra fica aqui, em prosa, para quem usa leitor de tela. */}
+          <p className="sr-only">
+            A bancada mostra os passos de raciocínio do modelo, o custo exato de cada resposta
+            e a janela de contexto em uso. Ao lado há uma ilustração da interface.
+          </p>
 
-          <Card variant="stat" padding="md" className="login-meter" aria-label="Exemplo de ficha de modelo">
-            <p className="login-meter-label">Ficha de modelo</p>
-            <p className="login-meter-name">DeepSeek V4 Flash</p>
-            <dl className="login-meter-grid">
-              <div>
-                <dt>Janela</dt>
-                <dd className="mono">1.048.576</dd>
-              </div>
-              <div>
-                <dt>Entrada / 1M</dt>
-                <dd className="mono">US$ 0,14</dd>
-              </div>
-              <div>
-                <dt>Saída / 1M</dt>
-                <dd className="mono">US$ 0,28</dd>
-              </div>
-              <div>
-                <dt>Raciocínio</dt>
-                <dd>sim</dd>
-              </div>
-            </dl>
-            <p className="login-meter-note">Valores ilustrativos — o catálogo real vem do servidor após o login.</p>
-          </Card>
+          <figure className="login-preview" inert aria-hidden="true">
+            <Message role="user" avatar={null} className="login-preview-message">
+              <Message.Content>Qual sai mais barato para resumir 40 páginas?</Message.Content>
+            </Message>
+
+            <div className="login-preview-thinking">
+              <p className="login-preview-thinking-head">
+                <AgentOrb activity="pensando" label="Raciocinando" />
+                Raciocinando
+              </p>
+              <ThinkingIndicator.Steps>
+                {THINKING_STEPS.map((step) => (
+                  <ThinkingIndicator.Step key={step.id} label={step.label} status={step.status} />
+                ))}
+              </ThinkingIndicator.Steps>
+            </div>
+
+            <Message role="assistant" avatar={null} className="login-preview-message">
+              <Message.Content>
+                O V4 Flash resolve por uma fração do Pro: mesma janela, saída 3× mais barata.
+              </Message.Content>
+            </Message>
+
+            <p className="login-preview-cost">
+              <span>Custo desta resposta</span>
+              <strong className="mono">US$ 0,0041</strong>
+            </p>
+
+            <Prompt
+              className="login-preview-prompt"
+              value="Compare os dois no meu histórico"
+              placeholder="Pergunte alguma coisa"
+            >
+              <Prompt.Textarea />
+              <Prompt.Toolbar>
+                <Prompt.Info>
+                  <span className="login-preview-model">DeepSeek V4 Flash</span>
+                  <span className="login-preview-ctx mono">1.048.576 ctx</span>
+                </Prompt.Info>
+                <Prompt.Actions>
+                  <Prompt.Submit aria-label="Enviar">
+                    <ArrowUp size={15} strokeWidth={2.5} />
+                  </Prompt.Submit>
+                </Prompt.Actions>
+              </Prompt.Toolbar>
+            </Prompt>
+          </figure>
 
           <ul className="login-providers" aria-label="Provedores suportados">
             {PROVIDERS.map((name) => (
