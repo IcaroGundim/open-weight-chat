@@ -47,6 +47,41 @@ function modelRows(payload: unknown): unknown[] {
   return [];
 }
 
+/** Nomes que os provedores usam em `supported_parameters` para raciocínio. */
+const REASONING_PARAMS = new Set(['reasoning', 'reasoning_effort', 'include_reasoning', 'thinking']);
+
+/**
+ * O modelo descoberto faz raciocínio?
+ *
+ * A ordem importa, e cada degrau existe por um motivo concreto:
+ *
+ * 1. `reasoning`/`supports_reasoning` **booleanos**, quando o provedor os
+ *    declara assim.
+ * 2. `supported_parameters`, a lista de parâmetros aceitos. É daqui que sai a
+ *    resposta na prática: a OpenRouter publica esse campo em 100% dos modelos
+ *    e marca 267 dos 399 como capazes. Note que ela **também** tem um campo
+ *    `reasoning`, mas é um OBJETO (`{supported_efforts, default_effort, …}`),
+ *    e era isso que fazia o degrau 1 não pegar — caindo direto no 3.
+ * 3. O nome do modelo. Heurística fraca, e o motivo do defeito que isto
+ *    corrige: `qwen/qwen3.8-max` raciocina e não casa com nenhum padrão, então
+ *    todos os 340 modelos de um OpenRouter real vinham marcados como `false`.
+ *    Fica só como último recurso, para provedores que não declaram nada.
+ *
+ * Uma lista de parâmetros presente e SEM raciocínio é um "não" do provedor, e
+ * é respeitada como tal — não cai para o nome.
+ */
+function detectReasoning(value: JsonRecord, id: string, label: string): boolean {
+  if (typeof value.reasoning === 'boolean') return value.reasoning;
+  if (typeof value.supports_reasoning === 'boolean') return value.supports_reasoning;
+
+  const declarados = value.supported_parameters ?? value.supportedParameters;
+  if (Array.isArray(declarados)) {
+    return declarados.some((item) => typeof item === 'string' && REASONING_PARAMS.has(item.trim().toLowerCase()));
+  }
+
+  return /reason|think|r1(?:$|[-.])|o[134](?:$|[-.])/iu.test(`${id} ${label}`);
+}
+
 function pricingFrom(row: JsonRecord): ProviderModelInput['pricing'] | undefined {
   const pricing = isRecord(row.pricing) ? row.pricing : undefined;
   const inputPerMillion = firstNumber(
@@ -92,11 +127,7 @@ function toModelInput(value: unknown): ProviderModelInput | null {
     value.max_context_length,
     value.max_tokens,
   );
-  const reasoning = typeof value.reasoning === 'boolean'
-    ? value.reasoning
-    : typeof value.supports_reasoning === 'boolean'
-      ? value.supports_reasoning
-      : /reason|think|r1(?:$|[-.])|o[134](?:$|[-.])/iu.test(`${id} ${label}`);
+  const reasoning = detectReasoning(value, id, label);
 
   return {
     id,

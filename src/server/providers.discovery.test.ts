@@ -117,3 +117,53 @@ describe('discoverProviderModels — SSRF via safeFetchWithRedirects', () => {
     expect((error as AppError).message).toContain('Não foi possível conectar');
   });
 });
+
+describe('capacidade de raciocínio dos modelos descobertos', () => {
+  const descobrir = async (row: Record<string, unknown>) => {
+    const models = await discoverProviderModels(
+      'http://localhost:11434/v1',
+      undefined,
+      async () => jsonResponse({ data: [row] }),
+    );
+    return models[0]?.reasoning;
+  };
+
+  it('lê supported_parameters — a forma real da OpenRouter', async () => {
+    // Regressão: `qwen/qwen3.8-max` raciocina, mas não casa com nenhuma
+    // heurística de nome. Antes, os 340 modelos de um OpenRouter real vinham
+    // marcados como `false` e travavam o seletor de esforço.
+    await expect(descobrir({
+      id: 'qwen/qwen3.8-max',
+      name: 'Qwen: Qwen3.8 Max',
+      supported_parameters: ['max_tokens', 'reasoning', 'reasoning_effort', 'temperature'],
+    })).resolves.toBe(true);
+  });
+
+  it('lista declarada sem raciocínio é um "não" do provedor, não cai para o nome', async () => {
+    await expect(descobrir({
+      id: 'algum/modelo-think-pro',
+      name: 'Think Pro',
+      supported_parameters: ['max_tokens', 'temperature'],
+    })).resolves.toBe(false);
+  });
+
+  it('ignora o campo `reasoning` quando ele é objeto, como na OpenRouter', async () => {
+    // O objeto não é booleano; quem decide é supported_parameters.
+    await expect(descobrir({
+      id: 'x/y',
+      name: 'X Y',
+      reasoning: { supported_efforts: ['high', 'low'], default_effort: 'high' },
+      supported_parameters: ['reasoning'],
+    })).resolves.toBe(true);
+  });
+
+  it('respeita o booleano quando o provedor o declara', async () => {
+    await expect(descobrir({ id: 'a/b', name: 'A B', reasoning: false, supported_parameters: ['reasoning'] })).resolves.toBe(false);
+    await expect(descobrir({ id: 'c/d', name: 'C D', supports_reasoning: true })).resolves.toBe(true);
+  });
+
+  it('sem declaração nenhuma, resta o nome', async () => {
+    await expect(descobrir({ id: 'foo/deepthink-v2', name: 'DeepThink v2' })).resolves.toBe(true);
+    await expect(descobrir({ id: 'foo/basico', name: 'Basico' })).resolves.toBe(false);
+  });
+});
