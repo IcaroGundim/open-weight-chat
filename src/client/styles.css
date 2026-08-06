@@ -96,6 +96,33 @@
   transition-duration: 0.001ms !important;
 }
 
+/* @usefragments/ui vestida com os tokens do app.
+ *
+ * Mora em :root, e não em .chat-app, porque menus suspensos da biblioteca são
+ * portalados para o <body> — fora da árvore do app. Preso ao .chat-app, o
+ * mapeamento não alcançava o popup do seletor de modelo, que então caía nos
+ * defaults da lib (Inter, cinzas próprios) e destoava de tudo. Como os valores
+ * apontam para tokens que já mudam por tema, um bloco só cobre claro e escuro.
+ * O painel de login tem as próprias sobrescritas e continua vencendo lá. */
+:root {
+  --fui-font-sans: var(--sans);
+  --fui-text-primary: var(--ink);
+  --fui-text-secondary: var(--ink-2);
+  --fui-text-tertiary: var(--ink-3);
+  --fui-border: var(--rule-strong);
+  --fui-border-default: var(--rule);
+  --fui-bg-primary: var(--paper);
+  --fui-bg-secondary: var(--surface);
+  --fui-bg-elevated: var(--paper);
+  --fui-bg-hover: var(--surface);
+  --fui-bg-active: var(--surface-2);
+  --fui-field-bg-disabled: var(--surface);
+  --fui-color-accent: var(--wine);
+  /* A sombra do menu é a única do sistema (§6.3), permitida por ser overlay. */
+  --fui-shadow-md: var(--shadow);
+  --fui-shadow-lg: var(--shadow);
+}
+
 /* ---------------------------------------------------------------- base --- */
 
 * { box-sizing: border-box; }
@@ -218,26 +245,6 @@ kbd {
   background: var(--paper);
   transition: grid-template-columns 0.22s ease;
   will-change: grid-template-columns;
-  /* @usefragments/ui vestida com os tokens do app, como já é feito no painel
-     de login: a biblioteca expõe primitivas --fui-*, e apontá-las para os
-     tokens daqui alinha os componentes sem combater classes internas. A
-     sombra do menu suspenso é a única do sistema (§6.3), e ela é permitida
-     justamente por ser overlay. */
-  --fui-font-sans: var(--sans);
-  --fui-text-primary: var(--ink);
-  --fui-text-secondary: var(--ink-2);
-  --fui-text-tertiary: var(--ink-3);
-  --fui-border: var(--rule-strong);
-  --fui-border-default: var(--rule);
-  --fui-bg-primary: var(--paper);
-  --fui-bg-secondary: var(--surface);
-  --fui-bg-elevated: var(--paper);
-  --fui-bg-hover: var(--surface);
-  --fui-field-bg-disabled: var(--surface);
-  --fui-color-accent: var(--wine);
-  --fui-focus-ring-color: var(--wine);
-  --fui-shadow-md: var(--shadow);
-  --fui-shadow-lg: var(--shadow);
 }
 .chat-app.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) minmax(0px, 0%); }
 .chat-app.artifact-panel-open { grid-template-columns: 276px minmax(0, 1fr) minmax(360px, 42%); }
@@ -691,8 +698,40 @@ kbd {
 }
 
 /* Seletor de modelo — Combobox da @usefragments/ui (DESIGN.md §3.3). Um
-   OpenRouter real traz ~400 modelos; a busca é o que torna a lista usável. */
+   OpenRouter real traz ~400 modelos; a busca é o que torna a lista usável.
+   As classes internas da biblioteca são hasheadas, então o alvo é o prefixo
+   estável do nome do módulo; o que dá para vestir por token está em :root. */
 .model-picker { min-width: 248px; max-width: 320px; }
+.model-picker [class*="inputWrapper"] {
+  height: 34px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+}
+.model-picker [class*="inputWrapper"]:hover:not(:focus-within) { background: var(--surface); }
+/* A biblioteca marca o foco com um outline translúcido a 34% — uma sombra
+   colorida, que a §3.1 proíbe, e que aparecia como um halo rosa em volta da
+   caixa. Aqui vale a convenção de campo do app (§7): borda vinho e um anel
+   nítido de 1px, igual ao compositor. */
+.model-picker [class*="inputWrapper"]:focus-within {
+  outline: none;
+  border-color: var(--wine);
+  box-shadow: 0 0 0 1px var(--wine);
+}
+.model-picker input { color: var(--ink); font-size: 14px; }
+.model-picker input::placeholder { color: var(--ink-3); }
+
+/* Menu suspenso. Ele é portalado para o <body>, então só classes próprias e
+   os tokens de :root o alcançam. */
+.model-picker-menu {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-3);
+  background: var(--paper);
+}
+.model-picker-menu [class*="groupLabel"] {
+  color: var(--ink-3);
+  font-size: 12px;
+}
 
 /* Cada linha diz o que decide a escolha aqui: se raciocina e quanto custa. */
 /* A Combobox.Empty da Base UI é uma live region que permanece no DOM para
@@ -700,8 +739,22 @@ kbd {
    O CSS da biblioteca dá padding a ela mesmo assim, e sobrava uma faixa
    branca no topo do menu. Vazia, ela não deve ocupar espaço. */
 .model-picker-menu [role="status"]:empty { display: none; }
+/* A lib separa grupos com um ::before em [role=group]:not(:first-child). Como
+   a live region acima continua no DOM (só oculta), o PRIMEIRO grupo passa a
+   ser o segundo filho e ganhava um traço solto colado no topo do menu. */
+.model-picker-menu [role="status"] + [role="group"]::before { display: none; }
 
-.model-option { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.model-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  /* A altura de linha da biblioteca é folgada demais para a densidade daqui;
+     duas linhas por item já dão o volume necessário. */
+  min-height: 0;
+  padding: 7px 10px;
+  border-radius: var(--r-2);
+}
 .model-option-name { color: var(--ink); font-size: 14px; }
 .model-option-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .model-option-tag {
