@@ -11,54 +11,73 @@ type ModelPickerProps = {
   loading?: boolean;
 };
 
-const compacto = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 });
+const compacto = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 0 });
+const dinheiro = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+
+/** Rótulo em sans, valor em mono: mono só mede (DESIGN.md §5.3). */
+function Medida({ rotulo, valor }: { rotulo: string; valor: string }) {
+  return (
+    <span className="model-option-medida">
+      {rotulo} <b className="mono">{valor}</b>
+    </span>
+  );
+}
 
 /**
- * Segunda linha do item: capacidade, janela e preço.
+ * Ficha do modelo: capacidade, janela e preço.
  *
  * Recebe o modelo por **prop**, e não por `children`, de propósito. A
  * biblioteca deriva o rótulo exibido no campo fechado com um `getNodeText`
  * que desce recursivamente por `props.children` — então qualquer texto
  * passado assim seria concatenado ao nome do modelo, e o campo mostrava
- * "DeepSeek V4 Flashraciocínio1 mi ct". Sem `children`, o walker devolve
- * string vazia e o rótulo fica sendo só o nome.
+ * "DeepSeek V4 Flashraciocínio1 mi ct". Um componente não é percorrido, e o
+ * rótulo fica sendo só o nome.
  */
 function OpcaoMeta({ model }: { model: ModelOption }) {
-  const valores = preco(model.inputPriceUsdPerMillion, model.outputPriceUsdPerMillion);
+  const entrada = model.inputPriceUsdPerMillion;
+  const saida = model.outputPriceUsdPerMillion;
+  const gratis = entrada === 0 && saida === 0;
+  const semPreco = entrada === undefined && saida === undefined;
+
   return (
-    <span className="model-option-sub">
-      {model.reasoning ? (
-        <span className="model-option-tag">
-          <Brain size={12} strokeWidth={2.2} aria-hidden="true" />
-          raciocínio
-        </span>
-      ) : null}
-      {model.configured === false ? (
-        <span className="model-option-tag model-option-tag-warn">
-          <KeyRound size={12} strokeWidth={2.2} aria-hidden="true" />
-          configure a chave
-        </span>
-      ) : null}
-      {model.stale ? (
-        <span className="model-option-tag model-option-tag-warn">
-          <TriangleAlert size={12} strokeWidth={2.2} aria-hidden="true" />
-          preço antigo
-        </span>
-      ) : null}
-      {model.contextWindow ? <span className="mono">janela {compacto.format(model.contextWindow)}</span> : null}
-      {valores ? <span className="mono">{valores}</span> : null}
-    </span>
+    <>
+      <span className="model-option-tags">
+        {model.reasoning ? (
+          <span className="model-option-tag">
+            <Brain size={12} strokeWidth={2.2} aria-hidden="true" />
+            raciocínio
+          </span>
+        ) : null}
+        {model.configured === false ? (
+          <span className="model-option-tag model-option-tag-warn">
+            <KeyRound size={12} strokeWidth={2.2} aria-hidden="true" />
+            sem chave
+          </span>
+        ) : null}
+        {model.stale ? (
+          <span className="model-option-tag model-option-tag-warn">
+            <TriangleAlert size={12} strokeWidth={2.2} aria-hidden="true" />
+            preço antigo
+          </span>
+        ) : null}
+      </span>
+
+      <span className="model-option-sub">
+        {model.contextWindow ? (
+          <Medida rotulo="janela" valor={`${compacto.format(model.contextWindow)} tokens`} />
+        ) : null}
+        {gratis ? <span className="model-option-medida">sem custo por token</span> : null}
+        {/* Preço ausente é dito com todas as letras: zero seria mentira. */}
+        {semPreco ? <span className="model-option-medida">preço não informado pelo provedor</span> : null}
+        {!gratis && !semPreco ? (
+          <>
+            <Medida rotulo="entrada/1M" valor={entrada === undefined ? '—' : `US$ ${dinheiro.format(entrada)}`} />
+            <Medida rotulo="saída/1M" valor={saida === undefined ? '—' : `US$ ${dinheiro.format(saida)}`} />
+          </>
+        ) : null}
+      </span>
+    </>
   );
-}
-
-const dinheiro = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
-
-/** Preço por milhão de tokens, no formato que a bancada usa para medir. */
-function preco(entrada?: number, saida?: number): string | null {
-  if (entrada === undefined && saida === undefined) return null;
-  if (entrada === 0 && saida === 0) return 'grátis';
-  const formata = (valor?: number) => (valor === undefined ? '—' : dinheiro.format(valor));
-  return `US$ ${formata(entrada)} / ${formata(saida)} por 1M`;
 }
 
 /**

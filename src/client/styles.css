@@ -724,6 +724,9 @@ kbd {
 /* Menu suspenso. Ele é portalado para o <body>, então só classes próprias e
    os tokens de :root o alcançam. */
 .model-picker-menu {
+  /* A ficha de medidas pede mais largura que o gatilho; a lista de modelos é
+     o lugar onde o custo é comparado, então ela ganha espaço para caber. */
+  min-width: 420px;
   border: 1px solid var(--rule);
   border-radius: var(--r-3);
   background: var(--paper);
@@ -744,19 +747,30 @@ kbd {
    ser o segundo filho e ganhava um traço solto colado no topo do menu. */
 .model-picker-menu [role="status"] + [role="group"]::before { display: none; }
 
+/* Duas faixas: nome com os avisos à direita, e a ficha de medidas embaixo. */
 .model-option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  /* A altura de linha da biblioteca é folgada demais para a densidade daqui;
-     duas linhas por item já dão o volume necessário. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "nome tags marca" "ficha ficha marca";
+  gap: 3px 10px;
+  align-items: center;
   min-height: 0;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border-radius: var(--r-2);
 }
-.model-option-name { color: var(--ink); font-size: 14px; }
-.model-option-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Sem área declarada, a marca de seleção da biblioteca caía numa terceira
+   linha do grid, solta abaixo da ficha. */
+.model-option [class*="itemIndicator"] { grid-area: marca; }
+.model-option-name { grid-area: nome; color: var(--ink); font-size: 14px; }
+.model-option-tags { grid-area: tags; display: flex; align-items: center; gap: 8px; }
+.model-option-sub { grid-area: ficha; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+/* Rótulo recuado, número em evidência — a leitura vai ao valor. */
+.model-option-medida { color: var(--ink-3); font-size: 12px; }
+.model-option-medida b {
+  color: var(--ink-2);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
 .model-option-tag {
   display: inline-flex;
   align-items: center;
