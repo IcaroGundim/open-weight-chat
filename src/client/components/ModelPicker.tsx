@@ -69,8 +69,13 @@ function OpcaoMeta({ model }: { model: ModelOption }) {
       </span>
 
       <span className="model-option-sub">
+        {/* Sem a palavra "janela": num painel de especificação, a capacidade
+            se lê sozinha ao lado dos preços rotulados. Mono só no número —
+            "de tokens" é unidade escrita, não valor medido (§5.3). */}
         {model.contextWindow ? (
-          <Medida rotulo="janela de" valor={compacto.format(model.contextWindow)} />
+          <span className="model-option-medida">
+            <b className="mono">{compacto.format(model.contextWindow)}</b> de tokens
+          </span>
         ) : null}
         {gratis ? <span className="model-option-medida">sem custo por token</span> : null}
         {/* Preço ausente é dito com todas as letras: zero seria mentira. */}
