@@ -1,14 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
+import { EffortPicker } from './EffortPicker';
+import type { EffortLevel } from '../types';
 
 type ComposerProps = {
   onSend: (content: string) => void | Promise<void>;
   onStop: () => void;
   isStreaming?: boolean;
   disabled?: boolean;
+  /**
+   * Nível de raciocínio da conversa. Fica aqui, e não no cabeçalho, porque é
+   * uma decisão de envio: pertence ao lugar onde se escreve e se despacha a
+   * mensagem, junto do custo que ela vai gerar.
+   */
+  effort: EffortLevel;
+  onEffortChange: (effort: EffortLevel) => void;
 };
 
-export function Composer({ onSend, onStop, isStreaming = false, disabled = false }: ComposerProps) {
+export function Composer({
+  onSend,
+  onStop,
+  isStreaming = false,
+  disabled = false,
+  effort,
+  onEffortChange,
+}: ComposerProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -58,7 +74,10 @@ export function Composer({ onSend, onStop, isStreaming = false, disabled = false
         aria-label="Mensagem"
       />
       <div className="composer-footer">
-        <span className="composer-hint"><b>Enter</b> envia · <b>Shift + Enter</b> quebra linha</span>
+        <div className="composer-leading">
+          <EffortPicker value={effort} onChange={onEffortChange} disabled={isStreaming} />
+          <span className="composer-hint"><b>Enter</b> envia · <b>Shift + Enter</b> quebra linha</span>
+        </div>
         <div className="composer-actions">
           {value.length > 0 ? <span className="composer-count">{value.length.toLocaleString('pt-BR')}</span> : null}
           {isStreaming ? (

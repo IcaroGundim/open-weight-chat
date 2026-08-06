@@ -12,7 +12,6 @@ import { ConversationSidebar } from './ConversationSidebar';
 import { AgentOrb } from './AgentOrb';
 import { MessageBubble } from './MessageBubble';
 import { ModelCard } from './ModelCard';
-import { EffortPicker } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -173,11 +172,6 @@ export function ChatView() {
               loading={isLoadingModels}
               disabled={isStreaming}
             />
-            <EffortPicker
-              value={activeEffort}
-              onChange={setEffort}
-              disabled={isStreaming}
-            />
             <CostBadge costUsd={totalCost} compact label="Sessão" />
             <button type="button" className="btn btn-icon" onClick={() => setCostOverviewOpen(true)} aria-label="Ver custos dos últimos 30 dias" title="Custos">
               <BarChart3 size={17} />
@@ -248,7 +242,14 @@ export function ChatView() {
         </section>
 
         <div className="composer-wrap">
-          <Composer onSend={sendMessage} onStop={stopStreaming} isStreaming={isStreaming} disabled={!canSend} />
+          <Composer
+            onSend={sendMessage}
+            onStop={stopStreaming}
+            isStreaming={isStreaming}
+            disabled={!canSend}
+            effort={activeEffort}
+            onEffortChange={setEffort}
+          />
           <p className="privacy-note">As chaves ficam no servidor e o Markdown é renderizado sem HTML cru.</p>
         </div>
       </main>

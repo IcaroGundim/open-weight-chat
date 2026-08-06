@@ -1051,6 +1051,13 @@ kbd {
   gap: 12px;
   padding-top: 10px;
 }
+.composer-leading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* No compositor o seletor é secundário à caixa de texto: menor que no
+   cabeçalho, na altura dos outros controles do rodapé. */
+.composer-leading .effort-picker { min-width: 118px; }
+.composer-leading .effort-picker select { height: 28px; font-size: 13px; }
+.composer-leading .effort-picker-icon,
+.composer-leading .effort-picker-chevron { top: 7px; }
 .composer-hint { color: var(--ink-3); font-size: 12px; }
 .composer-hint b { color: var(--ink-2); font-weight: 600; }
 .composer-count {
