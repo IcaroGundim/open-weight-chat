@@ -203,9 +203,15 @@ kbd {
 
 /* ------------------------------------------------------------- layout --- */
 
+/* A terceira trilha existe sempre, mesmo fechada (`minmax(0px, 0%)`), e não
+   só quando o painel de artefato abre. Sem isso a transição declarada abaixo
+   não roda: `grid-template-columns` só interpola entre listas com o MESMO
+   número de trilhas — de duas para três o navegador salta direto para o valor
+   final, e a coluna do chat encolhia num quadro só. Os modais são
+   `position: fixed`, então a trilha vazia não recebe nenhum deles. */
 .chat-app {
   display: grid;
-  grid-template-columns: 276px minmax(0, 1fr);
+  grid-template-columns: 276px minmax(0, 1fr) minmax(0px, 0%);
   width: 100%;
   height: 100dvh;
   overflow: hidden;
@@ -213,7 +219,7 @@ kbd {
   transition: grid-template-columns 0.22s ease;
   will-change: grid-template-columns;
 }
-.chat-app.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+.chat-app.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) minmax(0px, 0%); }
 .chat-app.artifact-panel-open { grid-template-columns: 276px minmax(0, 1fr) minmax(360px, 42%); }
 .chat-app.sidebar-collapsed.artifact-panel-open { grid-template-columns: 0 minmax(0, 1fr) minmax(360px, 42%); }
 
@@ -262,6 +268,16 @@ kbd {
   background: var(--paper);
   border-left: 1px solid var(--rule);
   z-index: 25;
+  /* O atraso é o ponto da animação, não um detalhe: enquanto a trilha do grid
+     se abre, o conteúdo do painel está sendo espremido em poucos pixels e o
+     texto reflui inteiro. Aparecer só depois disso esconde o refluxo — a
+     coluna abre, e o painel assenta dentro dela. `both` segura o quadro
+     inicial durante o atraso, senão ele pisca visível antes de começar. */
+  animation: artifact-panel-in 0.16s ease 0.1s both;
+}
+@keyframes artifact-panel-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: none; }
 }
 .artifact-panel-header,
 .artifact-panel-toolbar,
@@ -1767,6 +1783,14 @@ kbd {
     z-index: 40;
     border-left: 0;
     box-shadow: var(--shadow);
+    /* Em tela cheia não há trilha para abrir, então nada precisa ser
+       escondido: entra como gaveta, pela direita e sem atraso, no mesmo
+       0.2s da gaveta da barra lateral (§6.4). */
+    animation: artifact-panel-drawer-in 0.2s ease both;
+  }
+  @keyframes artifact-panel-drawer-in {
+    from { transform: translateX(102%); }
+    to { transform: none; }
   }
   .artifact-panel-header { padding: 14px 16px; }
   .artifact-panel-content { padding: 16px; }
