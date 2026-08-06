@@ -135,15 +135,15 @@ describe('motor de migração', () => {
   it('status em banco vazio: nenhuma migração aplicada', async () => {
     const run = createSqliteRunner(db);
     const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
-    expect(migrations.map((m) => m.version)).toEqual(['001', '002', '003']);
+    expect(migrations.map((m) => m.version)).toEqual(['001', '002', '003', '004']);
     expect(await appliedVersions(run)).toEqual(new Set());
   });
 
-  it('up em banco vazio aplica 001, 002 e 003 e cria o schema multiusuário', async () => {
+  it('up em banco vazio aplica 001 a 004 e cria o schema multiusuário', async () => {
     const run = createSqliteRunner(db);
     const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
     const result = await migrateUp(run, migrations, legacyContext(null));
-    expect(result.applied.map((m) => m.version)).toEqual(['001', '002', '003']);
+    expect(result.applied.map((m) => m.version)).toEqual(['001', '002', '003', '004']);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row: { name: string }) => row.name);
     expect(tables).toContain('users');
@@ -151,6 +151,8 @@ describe('motor de migração', () => {
 
     const conversationColumns = db.prepare('PRAGMA table_info(conversations)').all().map((row: { name: string }) => row.name);
     expect(conversationColumns).toContain('user_id');
+    // Coluna de nível de esforço da migração 004.
+    expect(conversationColumns).toContain('effort');
 
     // PK composta em provider_settings.
     const providerPk = db.prepare('PRAGMA table_info(provider_settings)').all().filter((row: { pk: number }) => row.pk > 0);
@@ -164,7 +166,7 @@ describe('motor de migração', () => {
     const rateTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('rate_limit_counters','rate_limit_streams')").all();
     expect(rateTables).toHaveLength(2);
 
-    expect(await appliedVersions(run)).toEqual(new Set(['001', '002', '003']));
+    expect(await appliedVersions(run)).toEqual(new Set(['001', '002', '003', '004']));
   });
 
   it('up é idempotente: segunda execução não quebra nem duplica', async () => {

@@ -12,6 +12,7 @@ import { ConversationSidebar } from './ConversationSidebar';
 import { AgentOrb } from './AgentOrb';
 import { MessageBubble } from './MessageBubble';
 import { ModelCard } from './ModelCard';
+import { EffortPicker } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -72,6 +73,9 @@ export function ChatView() {
   const sendMessage = useChatStore((state) => state.sendMessage);
   const stopStreaming = useChatStore((state) => state.stopStreaming);
   const setSelectedModel = useChatStore((state) => state.setSelectedModel);
+  const setEffort = useChatStore((state) => state.setEffort);
+  const pendingEffort = useChatStore((state) => state.pendingEffort);
+  const defaultEffort = useSettingsStore((state) => state.defaultEffort);
   const clearError = useChatStore((state) => state.clearError);
   const openArtifactSelection = useChatStore((state) => state.openArtifactSelection);
   const closeArtifact = useChatStore((state) => state.closeArtifact);
@@ -79,6 +83,9 @@ export function ChatView() {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const messages = activeConversationId ? messagesByConversation[activeConversationId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
   const selectedModel = models.find((model) => model.id === selectedModelId);
+  // Conversa aberta manda; sem conversa ainda, mostra o que a próxima vai
+  // nascer usando — a escolha pendente, ou o padrão das Configurações.
+  const activeEffort = activeConversation?.effort ?? pendingEffort ?? defaultEffort;
   const totalCost = useMemo(
     () => activeConversation?.totalCostUsd ?? messages.reduce((sum, message) => sum + (message.costUsd ?? message.usage?.costUsd ?? 0), 0),
     [activeConversation?.totalCostUsd, messages],
@@ -164,6 +171,12 @@ export function ChatView() {
               selectedModelId={selectedModelId}
               onChange={setSelectedModel}
               loading={isLoadingModels}
+              disabled={isStreaming}
+            />
+            <EffortPicker
+              value={activeEffort}
+              onChange={setEffort}
+              supported={selectedModel?.reasoning !== false}
               disabled={isStreaming}
             />
             <CostBadge costUsd={totalCost} compact label="Sessão" />

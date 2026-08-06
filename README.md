@@ -87,6 +87,14 @@ Se já existe um deploy com dados (conversas e provedores com chaves no formato 
 
 > ⚠️ **Os preços deste repositório não são autoritativos.** O catálogo de modelos e preços está centralizado em [providers.config.ts](src/server/providers.config.ts) e foi lido em 04/08/2026 — os valores do DeepSeek em particular vieram de busca, não da documentação oficial, e divergem do que o OpenRouter publica. Provedores reprecificam e aposentam IDs com frequência (`deepseek-chat` sumiu do catálogo em julho/2026). **Revalide antes de usar qualquer número como projeção de custo.** A procedência de cada valor está em [PLANO.md §13](docs/PLANO.md).
 
+## Nível de raciocínio
+
+Modelos de raciocínio cobram os tokens que gastam pensando, então **quanto o modelo pensa é uma decisão de custo** — e fica ao lado do seletor de modelo, no cabeçalho, com cinco níveis: **Automático**, **Desligado**, **Baixo**, **Médio** e **Alto**.
+
+Cada conversa guarda o próprio nível; **Configurações → Modelo** define com qual as novas nascem. O reflexo aparece no custo da mensagem e em `reasoningTokens`, que o app já mede.
+
+**Automático é o padrão e não envia parâmetro nenhum** — o provedor decide. Isso é deliberado: o "OpenAI-compatible" diverge exatamente aqui (uns esperam `reasoning_effort`, o OpenRouter usa um objeto `reasoning`, o GLM usa `thinking`), e há endpoint que responde **400** a um campo que não conhece. A tradução por provedor está em [effort.ts](src/server/effort.ts) e **não é autoritativa**, pela mesma razão dos preços; se o provedor recusar a requisição por causa desses campos, o servidor a repete sem eles, para que a preferência nunca derrube a mensagem. Em modelo sem raciocínio o seletor aparece desabilitado, e nada é enviado.
+
 ## Conectar outros provedores
 
 Além dos cinco embutidos (DeepSeek, GLM/Z.ai, Kimi, OpenRouter e Ollama), **qualquer endpoint OpenAI-compatível pode ser ligado** — OpenCode Zen, Groq, Together, Fireworks, um `llama.cpp` na sua rede. O cliente de streaming é um só; o que muda é `baseURL`, chave e id de modelo.

@@ -1,6 +1,7 @@
 import { AppError, UpstreamHttpError, isAbortError, normalizeError } from './errors';
 import { safeFetchWithRedirects } from './ssrf';
-import type { ProviderId } from '../shared/types';
+import { type EffortRequestParams, effortRequestParams, isEffortRejection } from './effort';
+import type { EffortLevel, ProviderId } from '../shared/types';
 import type { ProviderUsageLike } from './cost';
 
 export interface LlmMessage {
@@ -30,6 +31,14 @@ export interface LlmStreamOptions {
   messages: readonly LlmMessage[];
   signal: AbortSignal;
   temperature?: number;
+  /** Nível de raciocínio pedido. `auto`/ausente não envia parâmetro nenhum. */
+  effort?: EffortLevel;
+  /**
+   * O modelo selecionado faz raciocínio (`reasoning` no catálogo)? Falso
+   * suprime os campos de esforço: pedi-los a um modelo que não raciocina é
+   * arriscar um 400 para configurar algo que não existe.
+   */
+  modelSupportsReasoning?: boolean;
   fetchImpl?: typeof fetch;
   connectionTimeoutMs?: number;
   inactivityTimeoutMs?: number;
@@ -233,7 +242,7 @@ async function* readSseEvents(
   }
 }
 
-function requestBody(options: LlmStreamOptions): string {
+function requestBody(options: LlmStreamOptions, effort: EffortRequestParams | null): string {
   const body: Record<string, unknown> = {
     model: options.modelId,
     messages: options.messages,
@@ -241,6 +250,7 @@ function requestBody(options: LlmStreamOptions): string {
     stream_options: { include_usage: true },
   };
   if (options.temperature !== undefined) body.temperature = options.temperature;
+  if (effort) Object.assign(body, effort.body);
   return JSON.stringify(body);
 }
 
@@ -265,6 +275,12 @@ export class OpenAICompatibleClient {
     const connectionTimeoutMs = options.connectionTimeoutMs ?? DEFAULT_CONNECTION_TIMEOUT_MS;
     const inactivityTimeoutMs = options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
     let emittedToken = false;
+    // Vira null se o provedor rejeitar estes campos — ver o 400 tratado abaixo.
+    let effort = effortRequestParams(
+      options.effort,
+      options.providerId,
+      options.modelSupportsReasoning ?? true,
+    );
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (options.signal.aborted) throw options.signal.reason ?? abortError();
@@ -292,7 +308,7 @@ export class OpenAICompatibleClient {
           {
             method: 'POST',
             headers,
-            body: requestBody(options),
+            body: requestBody(options, effort),
             signal: combined.signal,
           },
           { fetchImpl },
@@ -311,6 +327,18 @@ export class OpenAICompatibleClient {
 
       if (!response.ok) {
         const body = await readLimitedText(response);
+        // O provedor rejeitou exatamente os campos de raciocínio que
+        // injetamos: refaz a requisição sem eles. Os nomes desses parâmetros
+        // variam entre provedores e nenhum deles é autoritativo (ver
+        // effort.ts), então a alternativa seria a mensagem inteira falhar por
+        // causa de uma preferência que este endpoint não conhece. Acontece no
+        // máximo uma vez — `effort` vira null — e não gasta o orçamento de
+        // retentativa de 429/5xx, que existe para outra coisa.
+        if (effort && isEffortRejection(response.status, body, effort.keys)) {
+          effort = null;
+          attempt -= 1;
+          continue;
+        }
         const upstreamError = new UpstreamHttpError(response.status, body);
         const retryable = response.status === 429 || response.status >= 500;
         if (!emittedToken && retryable && attempt < maxAttempts) {

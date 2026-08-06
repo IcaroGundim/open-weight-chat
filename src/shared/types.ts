@@ -31,6 +31,20 @@ export const ErrorCodeSchema = z.enum([
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
+/**
+ * Nível de raciocínio pedido ao modelo.
+ *
+ * `auto` é o padrão e significa "não envie parâmetro nenhum": o provedor
+ * decide, que é exatamente o comportamento anterior a esta funcionalidade.
+ * Isso importa porque cada provedor nomeia o parâmetro de um jeito e um
+ * campo desconhecido pode virar 400 — quem não escolhe, não arrisca.
+ *
+ * `off` pede para suprimir o raciocínio; onde o provedor não sabe desligar,
+ * o mapeamento cai no menor esforço possível (ver `src/server/effort.ts`).
+ */
+export const EffortLevelSchema = z.enum(['auto', 'off', 'low', 'medium', 'high']);
+export type EffortLevel = z.infer<typeof EffortLevelSchema>;
+
 export const ArtifactKindSchema = z.enum(['markdown', 'code', 'svg', 'mermaid']);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
@@ -251,6 +265,8 @@ export const ChatRequestSchema = z.object({
   providerId: ProviderIdSchema,
   modelId: z.string().trim().min(1).max(200),
   temperature: z.number().min(0).max(2).optional(),
+  /** Ausente equivale a `auto`: nenhum parâmetro de raciocínio é enviado. */
+  effort: EffortLevelSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
@@ -259,6 +275,7 @@ export const CreateConversationSchema = z.object({
   providerId: ProviderIdSchema.optional(),
   modelId: z.string().trim().min(1).max(200).optional(),
   systemPrompt: z.string().max(100_000).nullable().optional(),
+  effort: EffortLevelSchema.optional(),
 });
 export type CreateConversationInput = z.infer<typeof CreateConversationSchema>;
 
@@ -267,6 +284,7 @@ export const UpdateConversationSchema = z.object({
   providerId: ProviderIdSchema.optional(),
   modelId: z.string().trim().min(1).max(200).optional(),
   systemPrompt: z.string().max(100_000).nullable().optional(),
+  effort: EffortLevelSchema.optional(),
   archived: z.boolean().optional(),
 });
 export type UpdateConversationInput = z.infer<typeof UpdateConversationSchema>;
@@ -294,6 +312,8 @@ export const ConversationSummarySchema = z.object({
   providerId: ProviderIdSchema,
   modelId: z.string(),
   systemPrompt: z.string().nullable(),
+  /** Conversas criadas antes desta coluna existir leem como `auto`. */
+  effort: EffortLevelSchema.default('auto'),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
   archived: z.boolean(),

@@ -9,7 +9,7 @@ Requer **Node 24.16+** e **pnpm 11**. O `package.json` declara esse engine; o al
 ```bash
 pnpm dev                    # Vite (5173) + servidor tsx watch (8787), em paralelo
 pnpm typecheck              # tsc --noEmit
-pnpm test                   # vitest run — 199 testes
+pnpm test                   # vitest run — 217 testes
 pnpm build                  # cliente (dist/) + função da Vercel (api/entry.js) + dist/server.js
 pnpm design                 # contraste + auditoria das proibições visuais
 pnpm db:migrate status      # também: up --dry-run | up  (down não é suportado)
@@ -56,6 +56,8 @@ Chat self-hosted **BYOK** (cada usuário traz a própria chave) para qualquer en
 **Custo ausente aparece como indisponível, nunca como zero.** Zero seria mentira. Valores estimados carregam `estimated: true` e a interface os distingue visualmente.
 
 **Recurso de outro usuário devolve 404, não 403** — não confirma que existe.
+
+**Os parâmetros de raciocínio não são autoritativos, e por isso `auto` é o padrão.** "OpenAI-compatible" para de valer justamente no nível de esforço: cada provedor batizou o campo de um jeito (`reasoning_effort`, o objeto `reasoning` da OpenRouter, `thinking` no GLM) e parte devolve **400** diante de um campo desconhecido, o que derrubaria a mensagem inteira. A tradução vive só em `src/server/effort.ts`; `auto` não envia campo nenhum; e o `llm-client` repete a requisição **sem** esses campos quando o 400 reclama deles. Ao acrescentar um provedor, acrescente o dialeto lá — não espalhe o `if` pelo cliente HTTP.
 
 **Os preços em `providers.config.ts` não são autoritativos.** Foram lidos em 04/08/2026, alguns por busca e não pela documentação oficial. Revalide antes de tratar qualquer número como projeção.
 

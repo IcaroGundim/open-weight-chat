@@ -1,7 +1,9 @@
 import { ApiError, authHeaders } from './token-provider';
+import { isEffortLevel } from './types';
 import type {
   ChatMessage,
   ChatRequest,
+  EffortLevel,
   CostAnalytics,
   Conversation,
   Artifact,
@@ -144,6 +146,7 @@ function normalizeConversation(value: unknown, index: number): Conversation | nu
     totalCostUsd: asNumber(value.total_cost_usd ?? value.totalCostUsd ?? value.cost_usd),
     messageCount: asNumber(value.message_count ?? value.messageCount),
     archived: typeof value.archived === 'boolean' ? value.archived : undefined,
+    effort: isEffortLevel(value.effort) ? value.effort : undefined,
   };
 }
 
@@ -485,6 +488,7 @@ export async function createConversation(input: {
   title?: string;
   providerId?: string;
   modelId?: string;
+  effort?: EffortLevel;
 }): Promise<Conversation> {
   const payload = await requestJson('/api/conversations', {
     method: 'POST',
@@ -493,6 +497,7 @@ export async function createConversation(input: {
       title: input.title,
       providerId: input.providerId,
       modelId: input.modelId,
+      effort: input.effort,
     }),
   });
   const conversation = normalizeConversation(unwrapPayload(payload, ['conversation', 'data']), 0);
@@ -505,6 +510,20 @@ export async function renameConversation(id: string, title: string): Promise<Con
     method: 'PATCH',
     headers: JSON_HEADERS,
     body: JSON.stringify({ title }),
+  });
+  return normalizeConversation(unwrapPayload(payload, ['conversation', 'data']), 0) ?? undefined;
+}
+
+/**
+ * Grava o nível de esforço na conversa assim que o usuário troca, sem esperar
+ * o próximo envio: quem mexe no seletor e recarrega a página precisa
+ * reencontrar o que escolheu.
+ */
+export async function setConversationEffort(id: string, effort: EffortLevel): Promise<Conversation | undefined> {
+  const payload = await requestJson(`/api/conversations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ effort }),
   });
   return normalizeConversation(unwrapPayload(payload, ['conversation', 'data']), 0) ?? undefined;
 }

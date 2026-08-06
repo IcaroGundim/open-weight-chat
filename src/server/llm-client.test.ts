@@ -61,6 +61,52 @@ describe('OpenAI-compatible streaming', () => {
     expect(events).toContainEqual({ kind: 'usage', usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } });
   });
 
+  it('envia o campo de esforço no corpo e omite quando o nível é auto', async () => {
+    const bodies: string[] = [];
+    const client = new OpenAICompatibleClient(async (_input, init) => {
+      bodies.push(String(init?.body));
+      return sseResponse(['data: [DONE]\n\n']);
+    });
+    for await (const _ of client.stream(streamOptions({ effort: 'high' }))) {
+      // apenas consome o stream
+    }
+    for await (const _ of client.stream(streamOptions({ effort: 'auto' }))) {
+      // apenas consome o stream
+    }
+    expect(JSON.parse(bodies[0]).reasoning_effort).toBe('high');
+    expect(JSON.parse(bodies[1])).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('repete sem o campo de esforço quando o provedor devolve 400 reclamando dele', async () => {
+    const bodies: string[] = [];
+    const client = new OpenAICompatibleClient(async (_input, init) => {
+      bodies.push(String(init?.body));
+      if (bodies.length === 1) {
+        return new Response('{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}', { status: 400 });
+      }
+      return sseResponse(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', 'data: [DONE]\n\n']);
+    });
+    const events = [];
+    for await (const event of client.stream(streamOptions({ effort: 'high' }))) {
+      events.push(event);
+    }
+    // A mensagem chega: a preferência do usuário não derruba o envio.
+    expect(events).toContainEqual({ kind: 'text', text: 'ok' });
+    expect(JSON.parse(bodies[0]).reasoning_effort).toBe('high');
+    expect(JSON.parse(bodies[1])).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('não repete um 400 que nada tem a ver com o esforço', async () => {
+    let calls = 0;
+    const client = new OpenAICompatibleClient(async () => {
+      calls += 1;
+      return new Response('{"error":{"message":"maximum context length is 65536 tokens"}}', { status: 400 });
+    });
+    await expect(client.stream(streamOptions({ effort: 'high' })).next()).rejects.toThrow();
+    // Repetir aqui só faria o usuário esperar duas vezes pelo mesmo erro.
+    expect(calls).toBe(1);
+  });
+
   it('normalizes a trailing slash in the base URL', async () => {
     const requested: string[] = [];
     const client = new OpenAICompatibleClient(async (input) => {

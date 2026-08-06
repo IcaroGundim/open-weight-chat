@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { ProviderSettingsTab } from './ProviderSettingsTab';
 import { useSettingsStore } from '../store/settings';
+import { EFFORT_HINT, EFFORT_LABEL, EFFORT_LEVELS, isEffortLevel } from '../types';
 import type { DensityMode, ModelOption, ThemeMode } from '../types';
 
 type SettingsTab = 'appearance' | 'model' | 'providers' | 'data';
@@ -51,6 +52,8 @@ export function SettingsPanel({ models, selectedModelId, onModelChange, onClose 
   const setTheme = useSettingsStore((state) => state.setTheme);
   const setDensity = useSettingsStore((state) => state.setDensity);
   const setReduceMotion = useSettingsStore((state) => state.setReduceMotion);
+  const defaultEffort = useSettingsStore((state) => state.defaultEffort);
+  const setDefaultEffort = useSettingsStore((state) => state.setDefaultEffort);
   const resetPreferences = useSettingsStore((state) => state.resetPreferences);
 
   const providers = useMemo(() => {
@@ -203,8 +206,11 @@ export function SettingsPanel({ models, selectedModelId, onModelChange, onClose 
               <div id="settings-panel-model" role="tabpanel" aria-labelledby="settings-tab-model">
                 <div className="settings-section-intro">
                   <span className="settings-kicker">MODELO</span>
-                  <h3>Defina com qual modelo as novas conversas começam.</h3>
-                  <p>A troca é instantânea e também atualiza o seletor no cabeçalho.</p>
+                  <h3>Defina com que modelo e com quanto raciocínio as novas conversas começam.</h3>
+                  <p>
+                    A troca é instantânea e também atualiza os seletores no cabeçalho. Cada conversa
+                    guarda o próprio nível: mudar aqui não mexe nas que já existem.
+                  </p>
                 </div>
 
                 <div className="settings-group">
@@ -227,6 +233,23 @@ export function SettingsPanel({ models, selectedModelId, onModelChange, onClose 
                             </option>
                           ))}
                         </optgroup>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="settings-field">
+                    <span>
+                      <strong>Nível de raciocínio padrão</strong>
+                      <small>{EFFORT_HINT[defaultEffort]}</small>
+                    </span>
+                    <select
+                      value={defaultEffort}
+                      onChange={(event) => {
+                        if (isEffortLevel(event.target.value)) setDefaultEffort(event.target.value);
+                      }}
+                    >
+                      {EFFORT_LEVELS.map((level) => (
+                        <option key={level} value={level}>{EFFORT_LABEL[level]}</option>
                       ))}
                     </select>
                   </label>

@@ -16,6 +16,7 @@ import {
   type ProviderId,
   type Usage,
 } from '../../shared/types';
+import { parseEffortColumn } from '../effort';
 import type { ChatDatabaseAdapter } from './database';
 import type {
   CreateConversationData,
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS conversations (
   id text PRIMARY KEY, user_id text NOT NULL DEFAULT '', title text, provider_id text NOT NULL, model_id text NOT NULL,
-  system_prompt text, created_at bigint NOT NULL, updated_at bigint NOT NULL,
+  system_prompt text, effort text, created_at bigint NOT NULL, updated_at bigint NOT NULL,
   archived boolean NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
@@ -130,7 +131,8 @@ function conversationBase(row: Row): Omit<ConversationSummary, 'messageCount' | 
   const id = ProviderIdSchema.parse(row.provider_id);
   return {
     id: text(row.id), title: nullableText(row.title), providerId: id, modelId: text(row.model_id),
-    systemPrompt: nullableText(row.system_prompt), createdAt: number(row.created_at),
+    systemPrompt: nullableText(row.system_prompt), effort: parseEffortColumn(row.effort),
+    createdAt: number(row.created_at),
     updatedAt: number(row.updated_at), archived: bool(row.archived),
   };
 }
@@ -166,9 +168,10 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const id = data.id ?? randomUUID();
     const now = data.createdAt ?? Date.now();
     await this.rows(
-      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,created_at,updated_at,archived)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,false) RETURNING *`,
-      [id, userId, data.title ?? 'Nova conversa', data.providerId, data.modelId, data.systemPrompt ?? null, now],
+      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,created_at,updated_at,archived)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,false) RETURNING *`,
+      [id, userId, data.title ?? 'Nova conversa', data.providerId, data.modelId, data.systemPrompt ?? null,
+        data.effort ?? 'auto', now],
     );
     return await this.getConversation(userId, id) as Conversation;
   }
@@ -193,11 +196,11 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const current = await this.getConversation(userId, id);
     if (!current) return null;
     await this.rows(
-      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,archived=$7,updated_at=$8
+      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,archived=$8,updated_at=$9
         WHERE id=$1 AND user_id=$2 RETURNING *`,
       [id, userId, data.title === undefined ? current.title : data.title, data.providerId ?? current.providerId,
         data.modelId ?? current.modelId, data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt,
-        data.archived ?? current.archived, Date.now()],
+        data.effort ?? current.effort, data.archived ?? current.archived, Date.now()],
     );
     return this.getConversation(userId, id);
   }

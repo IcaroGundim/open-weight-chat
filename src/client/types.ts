@@ -2,6 +2,36 @@ export type ThemeMode = 'light' | 'dark';
 
 export type DensityMode = 'comfortable' | 'compact';
 
+/** Espelha EffortLevelSchema de shared/types.ts. */
+export type EffortLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+
+export const EFFORT_LEVELS: EffortLevel[] = ['auto', 'off', 'low', 'medium', 'high'];
+
+/**
+ * Rótulos e explicações dos níveis, num lugar só: o seletor do cabeçalho e a
+ * tela de Configurações precisam dizer exatamente a mesma coisa, senão o
+ * usuário lê duas descrições diferentes do mesmo controle.
+ */
+export const EFFORT_LABEL: Record<EffortLevel, string> = {
+  auto: 'Automático',
+  off: 'Desligado',
+  low: 'Baixo',
+  medium: 'Médio',
+  high: 'Alto',
+};
+
+export const EFFORT_HINT: Record<EffortLevel, string> = {
+  auto: 'Deixa o provedor decidir — nenhum parâmetro é enviado.',
+  off: 'Pede para não raciocinar. Onde o provedor não sabe desligar, usa o menor esforço.',
+  low: 'Menos raciocínio: respostas mais rápidas e mais baratas.',
+  medium: 'Equilíbrio entre profundidade e custo.',
+  high: 'Mais raciocínio: melhor em problemas difíceis, e mais caro.',
+};
+
+export function isEffortLevel(value: unknown): value is EffortLevel {
+  return typeof value === 'string' && (EFFORT_LEVELS as string[]).includes(value);
+}
+
 export type ArtifactKind = 'markdown' | 'code' | 'svg' | 'mermaid';
 
 export type ArtifactOperation = 'create' | 'rewrite' | 'update';
@@ -105,6 +135,7 @@ export interface Conversation {
   totalCostUsd?: number;
   messageCount?: number;
   archived?: boolean;
+  effort?: EffortLevel;
 }
 
 export interface ModelOption {
@@ -191,6 +222,7 @@ export interface ChatRequest {
   content: string;
   providerId: string;
   modelId: string;
+  effort?: EffortLevel;
 }
 
 export const EMPTY_MESSAGES: ChatMessage[] = [];

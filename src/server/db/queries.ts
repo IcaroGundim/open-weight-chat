@@ -15,11 +15,13 @@ import {
   type ConversationSummary,
   type Cost,
   type CostAnalyticsResponse,
+  type EffortLevel,
   type Message,
   type MessageRole,
   type ProviderId,
   type Usage,
 } from '../../shared/types';
+import { parseEffortColumn } from '../effort';
 
 const FALLBACK_SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   provider_id TEXT NOT NULL,
   model_id TEXT NOT NULL,
   system_prompt TEXT,
+  effort TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
@@ -152,6 +155,7 @@ export interface CreateConversationData {
   providerId: ProviderId;
   modelId: string;
   systemPrompt?: string | null;
+  effort?: EffortLevel;
   createdAt?: number;
 }
 
@@ -160,6 +164,7 @@ export interface UpdateConversationData {
   providerId?: ProviderId;
   modelId?: string;
   systemPrompt?: string | null;
+  effort?: EffortLevel;
   archived?: boolean;
 }
 
@@ -336,6 +341,7 @@ function rowToSummary(input: Record<string, unknown>): ConversationSummary {
     providerId: providerId.data,
     modelId: asString(row.model_id),
     systemPrompt: asNullableString(row.system_prompt),
+    effort: parseEffortColumn(row.effort),
     createdAt: asNumber(row.created_at),
     updatedAt: asNumber(row.updated_at),
     archived: asBoolean(row.archived),
@@ -392,6 +398,9 @@ export class ChatDatabase {
     // tabelas existentes, e o CREATE INDEX em user_id falharia sem a coluna).
     this.ensureColumn('conversations', 'user_id', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('provider_settings', 'user_id', "TEXT NOT NULL DEFAULT ''");
+    // Bancos criados antes do nível de esforço: NULL lê como `auto`, então a
+    // conversa antiga segue sem enviar parâmetro de raciocínio nenhum.
+    this.ensureColumn('conversations', 'effort', 'TEXT');
     this.db.exec(loadSchemaSql());
     // Keep external-content FTS consistent with databases created before the triggers existed.
     this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');");
@@ -426,8 +435,8 @@ export class ChatDatabase {
     this.db
       .prepare(
         `INSERT INTO conversations
-          (id, user_id, title, provider_id, model_id, system_prompt, created_at, updated_at, archived)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          (id, user_id, title, provider_id, model_id, system_prompt, effort, created_at, updated_at, archived)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         id,
@@ -436,6 +445,7 @@ export class ChatDatabase {
         data.providerId,
         data.modelId,
         data.systemPrompt ?? null,
+        data.effort ?? 'auto',
         now,
         now,
       );
@@ -446,7 +456,7 @@ export class ChatDatabase {
     const includeArchived = options.includeArchived ?? false;
     const rows = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
@@ -463,7 +473,7 @@ export class ChatDatabase {
   getConversation(userId: string, id: string): Conversation | null {
     const summaryRow = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
@@ -488,14 +498,15 @@ export class ChatDatabase {
     const providerId = data.providerId ?? current.providerId;
     const modelId = data.modelId ?? current.modelId;
     const systemPrompt = data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt;
+    const effort = data.effort ?? current.effort;
     const archived = data.archived === undefined ? current.archived : data.archived;
     this.db
       .prepare(
         `UPDATE conversations
-            SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, archived = ?, updated_at = ?
+            SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, effort = ?, archived = ?, updated_at = ?
           WHERE id = ? AND user_id = ?`,
       )
-      .run(title, providerId, modelId, systemPrompt, archived ? 1 : 0, Date.now(), id, userId);
+      .run(title, providerId, modelId, systemPrompt, effort, archived ? 1 : 0, Date.now(), id, userId);
     return this.getConversation(userId, id);
   }
 
@@ -819,7 +830,7 @@ export class ChatDatabase {
     const ftsQuery = escapeFtsQuery(query);
     const rows = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd

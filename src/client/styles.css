@@ -677,6 +677,41 @@ kbd {
   pointer-events: none;
 }
 
+/* Nível de raciocínio — irmão do seletor de modelo, e por isso com a mesma
+   casca. Mais estreito porque os rótulos são curtos e a decisão é secundária
+   à do modelo: é quanto pensar, não quem pensa. O ícone à esquerda substitui
+   um rótulo visível, que roubaria largura do cabeçalho. */
+.effort-picker { position: relative; display: block; min-width: 132px; }
+.effort-picker select {
+  appearance: none;
+  width: 100%;
+  height: 34px;
+  padding: 0 30px 0 30px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+  outline: 0;
+  font-size: 14px;
+  text-overflow: ellipsis;
+}
+.effort-picker select:hover:not(:disabled) { background: var(--surface); }
+.effort-picker select:disabled { color: var(--ink-3); }
+.effort-picker-icon {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+.effort-picker-chevron {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
 .cost-badge {
   display: inline-flex;
   align-items: baseline;

@@ -182,6 +182,45 @@ describe('Hono API multiusuário', () => {
     expect(afterDelete.status).toBe(404);
   });
 
+  it('leva o nível de esforço até o provedor e o guarda na conversa', async () => {
+    const bodies: string[] = [];
+    // qwen3 é o modelo do Ollama com reasoning: true no catálogo.
+    const app = appFor(database, USER_A, async (_input, init) => {
+      bodies.push(String(init?.body));
+      return sseResponse();
+    });
+    const response = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody({ modelId: 'qwen3', effort: 'high' }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(JSON.parse(bodies[0]).reasoning_effort).toBe('high');
+    // Persistido: recarregar a conversa reencontra o nível escolhido.
+    expect(database.listConversations(USER_A)[0].effort).toBe('high');
+  });
+
+  it('não pede esforço a um modelo que não raciocina', async () => {
+    const bodies: string[] = [];
+    // llama3.2 tem reasoning: false — mandar o campo seria arriscar um 400
+    // para configurar algo que o modelo não tem.
+    const app = appFor(database, USER_A, async (_input, init) => {
+      bodies.push(String(init?.body));
+      return sseResponse();
+    });
+    const response = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody({ effort: 'high' }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(JSON.parse(bodies[0])).not.toHaveProperty('reasoning_effort');
+  });
+
   it('proxyia um stream SSE compatível e persiste a resposta do assistente', async () => {
     const app = appFor(database, USER_A, async () => sseResponse());
     const response = await app.request('/api/chat', {

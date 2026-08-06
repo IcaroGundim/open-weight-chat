@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   provider_id TEXT NOT NULL,
   model_id TEXT NOT NULL,
   system_prompt TEXT,
+  effort TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))

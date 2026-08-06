@@ -9,15 +9,18 @@ import {
   getConversations,
   getModels,
   renameConversation as renameConversationRequest,
+  setConversationEffort,
   streamChat,
 } from '../api';
 import { getUserId } from '../token-provider';
+import { useSettingsStore } from './settings';
 import type {
   Artifact,
   ArtifactEndEnvelope,
   ArtifactStartEnvelope,
   ChatMessage,
   Conversation,
+  EffortLevel,
   ModelOption,
   StreamErrorEnvelope,
   Usage,
@@ -134,6 +137,12 @@ interface ChatState {
   streamingMessageId: string | null;
   streamController: AbortController | null;
   streamAbortRequested: boolean;
+  /**
+   * Nível escolhido antes de a conversa existir. Uma conversa nova só ganha
+   * linha no banco no primeiro envio, então a escolha feita até lá não tem
+   * onde ser gravada — fica aqui e entra no `createConversation`.
+   */
+  pendingEffort: EffortLevel | null;
   error: string | null;
 
   loadModels: () => Promise<void>;
@@ -144,6 +153,7 @@ interface ChatState {
   renameConversation: (id: string, title: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
+  setEffort: (effort: EffortLevel) => Promise<void>;
   loadArtifacts: (conversationId: string) => Promise<void>;
   openArtifact: (selection: { slug: string; version: number }) => void;
   closeArtifact: () => void;
@@ -173,6 +183,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingMessageId: null,
   streamController: null,
   streamAbortRequested: false,
+  pendingEffort: null,
   error: null,
 
   loadModels: async () => {
@@ -279,7 +290,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, error: null }),
+  newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, pendingEffort: null, error: null }),
 
   createConversation: async (title = 'Nova conversa') => {
     const epoch = sessionEpoch;
@@ -289,6 +300,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         title,
         providerId: selected?.providerId,
         modelId: selected?.id,
+        effort: get().pendingEffort ?? useSettingsStore.getState().defaultEffort,
       });
       if (!isCurrentSession(epoch)) return null;
       set((state) => ({
@@ -296,6 +308,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         activeConversationId: conversation.id,
         messagesByConversation: { ...state.messagesByConversation, [conversation.id]: [] },
         messagesLoaded: { ...state.messagesLoaded, [conversation.id]: true },
+        pendingEffort: null,
         error: null,
       }));
       return conversation;
@@ -356,6 +369,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
       window.localStorage.setItem(selectedModelStorageKey(), id);
     }
     set({ selectedModelId: id });
+  },
+
+  setEffort: async (effort) => {
+    const epoch = sessionEpoch;
+    const id = get().activeConversationId;
+    // Sem conversa ainda: guarda a escolha para o createConversation do
+    // primeiro envio, em vez de descartá-la silenciosamente.
+    if (!id) {
+      set({ pendingEffort: effort });
+      return;
+    }
+    const previous = get().conversations.find((conversation) => conversation.id === id)?.effort ?? 'auto';
+    if (previous === effort) return;
+    const apply = (value: EffortLevel) => set((state) => ({
+      conversations: state.conversations.map((conversation) => (
+        conversation.id === id ? { ...conversation, effort: value } : conversation
+      )),
+    }));
+    apply(effort);
+    try {
+      await setConversationEffort(id, effort);
+    } catch (error) {
+      // Reverte: um seletor mostrando um nível que o servidor não gravou
+      // faria o usuário pagar por um esforço que não pediu.
+      if (!isCurrentSession(epoch)) return;
+      apply(previous);
+      set({ error: errorMessage(error) });
+    }
   },
 
   openArtifact: (selection) => set({ openArtifactSelection: selection }),
@@ -522,6 +563,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           content: trimmed,
           providerId: selected.providerId,
           modelId: selected.id,
+          effort: get().conversations.find((conversation) => conversation.id === conversationId)?.effort ?? 'auto',
         },
         {
           onText: (text) => updateAssistant((message) => ({ ...message, content: message.content + text })),
@@ -744,6 +786,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingMessageId: null,
       streamController: null,
       streamAbortRequested: false,
+      // Troca de conta: a escolha pendente é do usuário anterior e não pode
+      // atravessar para a primeira conversa da conta seguinte.
+      pendingEffort: null,
       error: null,
     });
   },

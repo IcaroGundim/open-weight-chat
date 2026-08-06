@@ -460,6 +460,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
         providerId,
         modelId,
         systemPrompt: body.systemPrompt,
+        effort: body.effort,
       });
       return c.json({ conversation }, 201);
     } catch (error) {
@@ -538,12 +539,25 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
       if (request.conversationId && !conversation) {
         throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       }
+      // O nível de esforço acompanha provedor e modelo: vem no envio e a
+      // conversa é sincronizada, para que recarregar a página encontre o
+      // mesmo nível que estava valendo. Ausente no envio, mantém o da
+      // conversa — assim um cliente antigo não zera a escolha do usuário.
       if (!conversation) {
-        conversation = await db.createConversation(userId, { providerId: selection.provider.id, modelId: selection.model.id });
-      } else if (conversation.providerId !== selection.provider.id || conversation.modelId !== selection.model.id) {
+        conversation = await db.createConversation(userId, {
+          providerId: selection.provider.id,
+          modelId: selection.model.id,
+          effort: request.effort,
+        });
+      } else if (
+        conversation.providerId !== selection.provider.id
+        || conversation.modelId !== selection.model.id
+        || (request.effort !== undefined && request.effort !== conversation.effort)
+      ) {
         conversation = await db.updateConversation(userId, conversation.id, {
           providerId: selection.provider.id,
           modelId: selection.model.id,
+          effort: request.effort,
         });
         if (!conversation) throw new AppError('UNKNOWN', { status: 404, message: 'Conversa não encontrada.' });
       }
@@ -841,6 +855,9 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                 requiresApiKey: selection.provider.requiresApiKey,
                 messages: context.messages,
                 temperature: request.temperature,
+                // Já sincronizado acima: a conversa é a fonte da verdade.
+                effort: conversation.effort,
+                modelSupportsReasoning: selection.model.reasoning,
                 signal: upstreamController.signal,
                 fetchImpl: options.fetchImpl,
               })) {
