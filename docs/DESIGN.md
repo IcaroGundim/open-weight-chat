@@ -74,7 +74,9 @@ O motivo é de produto, não de estética: a tela de login é o primeiro contato
 2. **Gradiente como efeito, não como preenchimento.** O feixe animado marca um estado (o campo de entrada, vivo). Fundo de seção em `linear-gradient` roxo→azul continua sendo o tell nº 1, e continua fora.
 3. **A §13.5 não mudou.** Se a tela ficaria idêntica em qualquer outro app de chat, ela ainda não tem decisão dentro.
 
-Escopo: a tela de login. Levar a biblioteca para dentro do chat é outra decisão, e deve ser registrada aqui do mesmo jeito.
+Escopo inicial: a tela de login.
+
+**Estendido em 06/08/2026 ao seletor de modelo do chat**, com motivo próprio: um provedor BYOK real devolve cerca de 400 modelos, e um `<select>` nativo com essa lista é inutilizável. O `Combobox` traz busca, navegação por teclado e papéis ARIA prontos da Base UI — resolver isso à mão custaria mais e acertaria menos. Os componentes dentro do chat são vestidos pelo bloco `--fui-*` em `.chat-app`, do mesmo modo que os do painel de login.
 
 ---
 
