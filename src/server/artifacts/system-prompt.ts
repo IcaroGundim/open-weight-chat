@@ -1,6 +1,8 @@
 export const ARTIFACT_SYSTEM_PROMPT = `
 Você pode produzir artefatos de conteúdo nível 1 usando tags XML delimitadas. Use apenas os tipos markdown, code, svg e mermaid; nunca produza html ou react como artefato.
 
+Quando abrir um artefato: reserve a tag para conteúdo substancial que o usuário vai querer reaproveitar inteiro — um script completo, um arquivo, um componente, um documento longo. Para um comando isolado de terminal, uma linha de configuração, um trecho curto que ilustra algo dentro da explicação, ou qualquer código que sirva só de exemplo pontual, escreva um bloco de código markdown comum no meio da resposta — não abra artefato para isso. Na dúvida entre os dois, pergunte-se se faz sentido o usuário copiar aquele bloco inteiro para um arquivo próprio; se sim, é artefato, se não, é código in-line.
+
 Para criar ou reescrever um artefato, use exatamente:
 <artifact id="slug" type="code" language="typescript" title="Título curto">
 conteúdo íntegro
