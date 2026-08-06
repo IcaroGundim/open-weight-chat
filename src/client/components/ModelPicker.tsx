@@ -11,7 +11,13 @@ type ModelPickerProps = {
   loading?: boolean;
 };
 
-const compacto = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 0 });
+/* `compactDisplay: 'long'` dá "1 milhão" e "262 mil". A forma curta ("1 mi")
+   colidia com o "/1M" dos preços: duas notações de milhão na mesma linha. */
+const compacto = new Intl.NumberFormat('pt-BR', {
+  notation: 'compact',
+  compactDisplay: 'long',
+  maximumFractionDigits: 0,
+});
 const dinheiro = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
 
 /** Rótulo em sans, valor em mono: mono só mede (DESIGN.md §5.3). */
@@ -64,15 +70,15 @@ function OpcaoMeta({ model }: { model: ModelOption }) {
 
       <span className="model-option-sub">
         {model.contextWindow ? (
-          <Medida rotulo="janela" valor={`${compacto.format(model.contextWindow)} tokens`} />
+          <Medida rotulo="janela de" valor={compacto.format(model.contextWindow)} />
         ) : null}
         {gratis ? <span className="model-option-medida">sem custo por token</span> : null}
         {/* Preço ausente é dito com todas as letras: zero seria mentira. */}
         {semPreco ? <span className="model-option-medida">preço não informado pelo provedor</span> : null}
         {!gratis && !semPreco ? (
           <>
-            <Medida rotulo="entrada/1M" valor={entrada === undefined ? '—' : `US$ ${dinheiro.format(entrada)}`} />
-            <Medida rotulo="saída/1M" valor={saida === undefined ? '—' : `US$ ${dinheiro.format(saida)}`} />
+            <Medida rotulo="entrada" valor={entrada === undefined ? '—' : `US$ ${dinheiro.format(entrada)}/1M`} />
+            <Medida rotulo="saída" valor={saida === undefined ? '—' : `US$ ${dinheiro.format(saida)}/1M`} />
           </>
         ) : null}
       </span>
