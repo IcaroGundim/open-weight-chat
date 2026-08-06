@@ -202,10 +202,13 @@ describe('Hono API multiusuário', () => {
     expect(database.listConversations(USER_A)[0].effort).toBe('high');
   });
 
-  it('não pede esforço a um modelo que não raciocina', async () => {
+  it('envia o esforço mesmo em modelo marcado como sem raciocínio', async () => {
     const bodies: string[] = [];
-    // llama3.2 tem reasoning: false — mandar o campo seria arriscar um 400
-    // para configurar algo que o modelo não tem.
+    // llama3.2 tem reasoning: false no catálogo — e TODO modelo descoberto
+    // pelo /models de um provedor real recebe esse mesmo false, porque o
+    // endpoint padrão não informa a capacidade. Travar por aí desabilitava o
+    // recurso inteiro no uso BYOK. Quem protege do 400 é a retentativa sem os
+    // campos, exercitada em llm-client.test.ts.
     const app = appFor(database, USER_A, async (_input, init) => {
       bodies.push(String(init?.body));
       return sseResponse();
@@ -218,7 +221,7 @@ describe('Hono API multiusuário', () => {
     expect(response.status).toBe(200);
     await response.text();
 
-    expect(JSON.parse(bodies[0])).not.toHaveProperty('reasoning_effort');
+    expect(JSON.parse(bodies[0]).reasoning_effort).toBe('high');
   });
 
   it('proxyia um stream SSE compatível e persiste a resposta do assistente', async () => {

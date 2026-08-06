@@ -33,12 +33,6 @@ export interface LlmStreamOptions {
   temperature?: number;
   /** Nível de raciocínio pedido. `auto`/ausente não envia parâmetro nenhum. */
   effort?: EffortLevel;
-  /**
-   * O modelo selecionado faz raciocínio (`reasoning` no catálogo)? Falso
-   * suprime os campos de esforço: pedi-los a um modelo que não raciocina é
-   * arriscar um 400 para configurar algo que não existe.
-   */
-  modelSupportsReasoning?: boolean;
   fetchImpl?: typeof fetch;
   connectionTimeoutMs?: number;
   inactivityTimeoutMs?: number;
@@ -276,11 +270,7 @@ export class OpenAICompatibleClient {
     const inactivityTimeoutMs = options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
     let emittedToken = false;
     // Vira null se o provedor rejeitar estes campos — ver o 400 tratado abaixo.
-    let effort = effortRequestParams(
-      options.effort,
-      options.providerId,
-      options.modelSupportsReasoning ?? true,
-    );
+    let effort = effortRequestParams(options.effort, options.providerId);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (options.signal.aborted) throw options.signal.reason ?? abortError();

@@ -66,17 +66,25 @@ export interface EffortRequestParams {
 /**
  * Monta os campos de raciocínio para um envio.
  *
- * Devolve `null` — nenhum campo, corpo intocado — em três casos, todos
- * deliberados: nível `auto`, modelo sem suporte a raciocínio (mandar o campo
- * seria pedir 400 por nada), e nível ausente.
+ * Devolve `null` — nenhum campo, corpo intocado — só quando o nível é `auto`
+ * ou está ausente.
+ *
+ * **Não** consulta o `reasoning` do catálogo, e isso é uma correção de rumo:
+ * a primeira versão suprimia os campos quando o modelo estava marcado como
+ * "não raciocina". Só que esse flag vem `false` para TODO modelo descoberto
+ * pelo `/models` do provedor — o endpoint padrão da OpenAI não informa essa
+ * capacidade —, o que travava a funcionalidade justamente no caso BYOK, que é
+ * a premissa do produto. O flag também não é autoritativo nem no catálogo
+ * embutido, pela mesma razão que os preços não são.
+ *
+ * Quem protege do 400 é a retentativa sem estes campos, no `llm-client`. O
+ * gate era redundante com ela — e, ao contrário dela, errava fechado.
  */
 export function effortRequestParams(
   level: EffortLevel | undefined,
   providerId: ProviderId,
-  modelSupportsReasoning: boolean,
 ): EffortRequestParams | null {
   if (!level || level === 'auto') return null;
-  if (!modelSupportsReasoning) return null;
 
   const dialect = DIALECT_BY_PROVIDER[providerId] ?? DEFAULT_DIALECT;
 

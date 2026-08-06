@@ -857,7 +857,6 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                 temperature: request.temperature,
                 // Já sincronizado acima: a conversa é a fonte da verdade.
                 effort: conversation.effort,
-                modelSupportsReasoning: selection.model.reasoning,
                 signal: upstreamController.signal,
                 fetchImpl: options.fetchImpl,
               })) {

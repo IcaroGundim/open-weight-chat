@@ -3,42 +3,46 @@ import { effortRequestParams, isEffortRejection } from './effort';
 
 describe('tradução do nível de esforço', () => {
   it('não envia nada em auto — o padrão precisa ser idêntico ao comportamento anterior', () => {
-    expect(effortRequestParams('auto', 'deepseek', true)).toBeNull();
-    expect(effortRequestParams(undefined, 'deepseek', true)).toBeNull();
+    expect(effortRequestParams('auto', 'deepseek')).toBeNull();
+    expect(effortRequestParams(undefined, 'deepseek')).toBeNull();
   });
 
-  it('não envia nada quando o modelo não faz raciocínio', () => {
-    // GLM 4.7 Flash tem reasoning: false no catálogo. Mandar o campo seria
-    // pedir 400 para configurar algo que o modelo não tem.
-    expect(effortRequestParams('high', 'glm', false)).toBeNull();
-    expect(effortRequestParams('off', 'openrouter', false)).toBeNull();
+  it('não consulta o flag `reasoning` do catálogo — ele trava o BYOK', () => {
+    // Regressão: a primeira versão suprimia os campos quando o modelo estava
+    // marcado como "não raciocina". Mas a descoberta grava `reasoning: false`
+    // em TODO modelo vindo do /models do provedor (o endpoint padrão não
+    // informa a capacidade), o que desabilitava o recurso para os 340 modelos
+    // de um OpenRouter real. Quem protege do 400 é a retentativa sem os
+    // campos, no llm-client — não um flag que erra fechado.
+    expect(effortRequestParams('high', 'glm')?.body).toEqual({ thinking: { type: 'enabled' } });
+    expect(effortRequestParams('off', 'openrouter')?.body).toEqual({ reasoning: { enabled: false } });
   });
 
   it('usa reasoning_effort na convenção OpenAI', () => {
-    expect(effortRequestParams('high', 'deepseek', true)).toEqual({
+    expect(effortRequestParams('high', 'deepseek')).toEqual({
       body: { reasoning_effort: 'high' },
       keys: ['reasoning_effort'],
     });
-    expect(effortRequestParams('low', 'kimi', true)?.body).toEqual({ reasoning_effort: 'low' });
+    expect(effortRequestParams('low', 'kimi')?.body).toEqual({ reasoning_effort: 'low' });
   });
 
   it('usa o objeto reasoning da OpenRouter, o único que sabe desligar', () => {
-    expect(effortRequestParams('medium', 'openrouter', true)?.body).toEqual({ reasoning: { effort: 'medium' } });
-    expect(effortRequestParams('off', 'openrouter', true)?.body).toEqual({ reasoning: { enabled: false } });
+    expect(effortRequestParams('medium', 'openrouter')?.body).toEqual({ reasoning: { effort: 'medium' } });
+    expect(effortRequestParams('off', 'openrouter')?.body).toEqual({ reasoning: { enabled: false } });
   });
 
   it('reduz o GLM a ligado/desligado, porque o dialeto não gradua', () => {
-    expect(effortRequestParams('low', 'glm', true)?.body).toEqual({ thinking: { type: 'enabled' } });
-    expect(effortRequestParams('high', 'glm', true)?.body).toEqual({ thinking: { type: 'enabled' } });
-    expect(effortRequestParams('off', 'glm', true)?.body).toEqual({ thinking: { type: 'disabled' } });
+    expect(effortRequestParams('low', 'glm')?.body).toEqual({ thinking: { type: 'enabled' } });
+    expect(effortRequestParams('high', 'glm')?.body).toEqual({ thinking: { type: 'enabled' } });
+    expect(effortRequestParams('off', 'glm')?.body).toEqual({ thinking: { type: 'disabled' } });
   });
 
   it('traduz off como esforço mínimo onde não há desligamento de verdade', () => {
-    expect(effortRequestParams('off', 'deepseek', true)?.body).toEqual({ reasoning_effort: 'minimal' });
+    expect(effortRequestParams('off', 'deepseek')?.body).toEqual({ reasoning_effort: 'minimal' });
   });
 
   it('trata provedor personalizado pela convenção mais difundida', () => {
-    expect(effortRequestParams('high', 'meu-endpoint', true)?.body).toEqual({ reasoning_effort: 'high' });
+    expect(effortRequestParams('high', 'meu-endpoint')?.body).toEqual({ reasoning_effort: 'high' });
   });
 });
 

@@ -176,7 +176,6 @@ export function ChatView() {
             <EffortPicker
               value={activeEffort}
               onChange={setEffort}
-              supported={selectedModel?.reasoning !== false}
               disabled={isStreaming}
             />
             <CostBadge costUsd={totalCost} compact label="Sessão" />

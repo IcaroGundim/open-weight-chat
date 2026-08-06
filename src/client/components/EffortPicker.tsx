@@ -5,12 +5,6 @@ import { EFFORT_HINT, EFFORT_LABEL, EFFORT_LEVELS, isEffortLevel, type EffortLev
 type EffortPickerProps = {
   value: EffortLevel;
   onChange: (effort: EffortLevel) => void;
-  /**
-   * O modelo em uso faz raciocínio? Falso desabilita o controle: o servidor
-   * não envia parâmetro nenhum nesse caso, e um seletor ativo que não muda
-   * nada é pior que um desabilitado que explica o porquê.
-   */
-  supported?: boolean;
   disabled?: boolean;
 };
 
@@ -24,15 +18,10 @@ type EffortPickerProps = {
 export const EffortPicker = memo(function EffortPicker({
   value,
   onChange,
-  supported = true,
   disabled = false,
 }: EffortPickerProps) {
-  const title = supported
-    ? EFFORT_HINT[value]
-    : 'O modelo selecionado não faz raciocínio, então o nível não se aplica.';
-
   return (
-    <label className="effort-picker" title={title}>
+    <label className="effort-picker" title={EFFORT_HINT[value]}>
       <span className="sr-only">Nível de raciocínio</span>
       <Gauge className="effort-picker-icon" size={14} aria-hidden="true" />
       <select
@@ -40,7 +29,7 @@ export const EffortPicker = memo(function EffortPicker({
         onChange={(event) => {
           if (isEffortLevel(event.target.value)) onChange(event.target.value);
         }}
-        disabled={disabled || !supported}
+        disabled={disabled}
         aria-label="Nível de raciocínio"
       >
         {EFFORT_LEVELS.map((level) => (
