@@ -7,6 +7,7 @@ import { AgentOrb } from './AgentOrb';
 import { SearchBlock } from './SearchBlock';
 import { ArtifactCard } from './ArtifactCard';
 import { CostBadge } from './CostBadge';
+import { TokenSpeedometer } from './TokenSpeedometer';
 import { ReasoningBlock } from './ReasoningBlock';
 import { SpreadsheetCard } from './SpreadsheetCard';
 import { EMPTY_ARTIFACTS, type Attachment, type ChatMessage } from '../types';
@@ -297,6 +298,14 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
 
       {isUser ? null : (
         <div className="message-footer">
+          {/* Velocímetro junto do custo: as duas são medidas do mesmo turno, e
+              quem olha uma costuma querer a outra. */}
+          <TokenSpeedometer
+            chars={message.content.length + (message.reasoning?.length ?? 0)}
+            streaming={message.status === 'streaming'}
+            completionTokens={message.usage?.completionTokens}
+            elapsedMs={message.startedAt && message.finishedAt ? message.finishedAt - message.startedAt : undefined}
+          />
           <CostBadge costUsd={message.costUsd} usage={message.usage} />
           {message.costEstimated && !message.usage?.costEstimated ? (
             <span className="message-note message-note-warn">custo estimado</span>

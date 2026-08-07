@@ -901,6 +901,48 @@ describe('Hono API multiusuário', () => {
     expect(mensagem?.content).not.toContain(longo);
   });
 
+  it('não deixa o documento duplicado no chat quando o modelo abre o artefato E repete fora', async () => {
+    // É o caso que a rede de segurança não pegava: já existe artefato, então
+    // ela pulava, e o corpo da mensagem — que é o que se lê primeiro —
+    // continuava com o documento inteiro.
+    const longo = 'Conteúdo do documento. '.repeat(120);
+    const app = appFor(database, USER_A, async (_input, init) => {
+      const revisor = String(init?.body).includes('revisar');
+      if (!revisor) return sseTexto('rascunho');
+      return sseTexto(
+        `Segue o documento.\n\n<artifact id="documento" type="markdown" title="Mecânica">${longo}</artifact>\n\n${longo}`,
+      );
+    });
+    await (await chatScience(app, 'basic')).text();
+
+    const conversa = database.listConversations(USER_A)[0];
+    const artefatos = database.getArtifacts(USER_A, conversa.id);
+    expect(artefatos).toHaveLength(1);
+    // O documento está no artefato…
+    expect(artefatos[0].versions[0].content).toContain('Conteúdo do documento.');
+    // …e a mensagem virou uma apresentação curta com a chamada dele.
+    const mensagem = database.getMessages(USER_A, conversa.id).at(-1);
+    expect(mensagem?.content).toContain('Segue o documento.');
+    expect(mensagem!.content.length).toBeLessThan(400);
+  });
+
+  it('apresentação curta fora do artefato é preservada', async () => {
+    // Duas frases é o que o prompt pede; cortar isso deixaria a mensagem sem
+    // dizer o que o artefato contém.
+    const app = appFor(database, USER_A, async (_input, init) => {
+      const revisor = String(init?.body).includes('revisar');
+      if (!revisor) return sseTexto('rascunho');
+      return sseTexto(
+        'Este documento cobre as leis de Newton.\n\n'
+        + `<artifact id="documento" type="markdown" title="Newton">${'Texto. '.repeat(300)}</artifact>`,
+      );
+    });
+    await (await chatScience(app, 'basic')).text();
+    const conversa = database.listConversations(USER_A)[0];
+    const mensagem = database.getMessages(USER_A, conversa.id).at(-1);
+    expect(mensagem?.content).toContain('Este documento cobre as leis de Newton.');
+  });
+
   it('em LaTeX o artefato nasce como código latex, para abrir na prévia certa', () => {
     // Errar o tipo entrega o documento certo no renderizador errado.
     const longo = 'Texto do documento. '.repeat(120);

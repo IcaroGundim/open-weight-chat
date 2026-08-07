@@ -274,20 +274,22 @@ describe('figuras em TikZ', () => {
 \end{tikzpicture}
 \caption{Reta de regressão}
 \end{figure}`);
-    expect(doc.markdown).toContain('Figura (TikZ)');
+    // Cerca ```tikz: o renderizador de Markdown a troca pela figura desenhada.
+    expect(doc.markdown).toContain('```tikz');
     expect(doc.markdown).toContain('Reta de regressão');
-    // E o código do desenho não vaza como texto.
-    expect(doc.markdown).not.toContain('\\draw');
+    // O desenho vai DENTRO da cerca, para o renderizador poder interpretá-lo.
+    expect(doc.markdown).toContain('\\draw (0,0) -- (2,2)');
   });
 
-  it('marca tikzpicture solto, sem figure em volta', () => {
+  it('converte tikzpicture solto, sem figure em volta', () => {
     const doc = latexToMarkdown(String.raw`\begin{tikzpicture}\draw (0,0) circle (1);\end{tikzpicture}`);
-    expect(doc.markdown).toContain('Figura (TikZ)');
+    expect(doc.markdown).toContain('```tikz');
+    expect(doc.markdown).toContain('circle (1)');
   });
 
   it('não mexe em figure sem tikz', () => {
     const doc = latexToMarkdown(String.raw`\begin{figure}\caption{Só legenda}\end{figure}`);
-    expect(doc.markdown).not.toContain('TikZ');
+    expect(doc.markdown).not.toContain('```tikz');
     expect(doc.markdown).toContain('Só legenda');
   });
 });

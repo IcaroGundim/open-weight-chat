@@ -98,6 +98,14 @@ const MAX_DESCARTE_APOS_MARCADOR = 4_000;
  * parágrafo dentro de um painel com versionamento é cerimônia sem função.
  */
 const MIN_SCIENCE_ARTIFACT_CHARS = 1_200;
+
+/**
+ * Quanta prosa o modo Science pode deixar FORA do artefato.
+ *
+ * O prompt pede duas frases; isto é o teto do que se tolera antes de assumir
+ * que o modelo repetiu o documento no corpo da mensagem.
+ */
+const MAX_SCIENCE_PROSE_CHARS = 600;
 import { pickDefaultRateLimitStore, type RateLimitStore } from './rate-limit';
 
 // Node 24 can load the local .env without adding a dotenv dependency. Existing
@@ -1845,6 +1853,36 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                 content = `${title}\n\n${artifactMarker(slug, versao)}`;
                 await trace(stream, 'artefato', 'documento guardado pelo servidor',
                   `${kind}${language ? `/${language}` : ''} · v${versao} · ${documento.length} caracteres`);
+              }
+
+              /**
+               * Modo Science: a mensagem fica curta, mesmo quando o artefato
+               * foi aberto pelo próprio modelo.
+               *
+               * O prompt manda escrever no máximo duas frases fora do
+               * artefato, e o revisor com frequência escreve o documento
+               * inteiro fora TAMBÉM — resultado: o texto aparece duplicado, e
+               * é o corpo da mensagem que o usuário lê primeiro. A rede de
+               * segurança acima não pegava esse caso, porque ali já existia
+               * artefato.
+               *
+               * Aqui a prosa é medida SEM os marcadores: o que sobra é o que
+               * o modelo escreveu solto. Passando do limite, vira uma linha
+               * apontando para o artefato — o documento não se perde, ele está
+               * no painel, versionado e com o texto íntegro.
+               */
+              if (cadeia && producedVersions.length > 0) {
+                const marcadores = producedVersions.map((item) => artifactMarker(item.slug, item.version));
+                let prosa = content;
+                for (const marcador of marcadores) prosa = prosa.split(marcador).join('');
+                if (prosa.trim().length > MAX_SCIENCE_PROSE_CHARS) {
+                  // Guarda as duas primeiras frases, que costumam ser a
+                  // apresentação legítima do documento.
+                  const apresentacao = prosa.trim().split(/(?<=[.!?])\s+/u).slice(0, 2).join(' ').slice(0, 320);
+                  content = `${apresentacao}\n\n${marcadores.join('\n\n')}`;
+                  await trace(stream, 'artefato', 'prosa duplicada removida da mensagem',
+                    `${prosa.trim().length} caracteres fora do artefato`);
+                }
               }
 
               // Degradação nunca é silenciosa: se um estágio caiu, o documento

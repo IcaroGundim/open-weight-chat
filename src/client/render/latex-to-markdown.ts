@@ -238,6 +238,24 @@ function protect(source: string): { texto: string; protegidos: Protegido[] } {
     texto = texto.replace(padrao, (_todo, corpo: string) => guardar(`\n\`\`\`\n${corpo.replace(/^\n|\n$/gu, '')}\n\`\`\`\n`));
   }
 
+  /**
+   * TikZ entra protegido, como o verbatim, e pelo mesmo motivo: o corpo é
+   * CÓDIGO DE DESENHO. Solto, ele passaria pelas limpezas seguintes — `\draw`
+   * viraria comando desconhecido e sumiria, e `--` viraria travessão. O
+   * renderizador de Markdown troca a cerca pela figura desenhada.
+   */
+  texto = texto.replace(
+    /\\begin\{figure\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{figure\}|\\begin\{tikzpicture\}([\s\S]*?)\\end\{tikzpicture\}/gu,
+    (todo) => {
+      if (!todo.includes('tikzpicture')) return todo;
+      const legenda = /\\caption\s*\{([^{}]*)\}/u.exec(todo)?.[1]?.trim();
+      const desenho = /\\begin\{tikzpicture\}([\s\S]*?)\\end\{tikzpicture\}/u.exec(todo)?.[1] ?? '';
+      // A legenda vai na primeira linha da cerca: o `\caption` fica fora do
+      // `tikzpicture`, e a cerca só transporta um bloco de texto.
+      return guardar(`\n\n\`\`\`tikz\n${legenda ? `${legenda}\n` : ''}${desenho.trim()}\n\`\`\`\n\n`);
+    },
+  );
+
   for (const [nome, forma] of Object.entries(MATH_ENVIRONMENTS)) {
     const padrao = new RegExp(`\\\\begin\\{${nome}\\*?\\}([\\s\\S]*?)\\\\end\\{${nome}\\*?\\}`, 'gu');
     texto = texto.replace(padrao, (_todo, corpo: string) => {
@@ -457,20 +475,6 @@ export function latexToMarkdown(source: string): LatexDocument {
     .replace(/(?<!-)--(?!-)/gu, '–')
     .replace(/``/gu, '“')
     .replace(/''/gu, '”');
-
-  // TikZ é o mecanismo de figura do LaTeX, e é código de desenho: renderizá-lo
-  // exigiria um compilador TeX. Em vez de deixá-lo cair no descarte de
-  // comandos desconhecidos — onde a figura sumiria sem deixar rastro —, ele
-  // vira um marcador nomeado pela legenda. Assim o leitor da prévia sabe que
-  // há uma figura ali e o que ela mostra; o LaTeX exportado continua íntegro.
-  corpo = corpo.replace(
-    /\\begin\{figure\}(\[[^\]]*\])?([\s\S]*?)\\end\{figure\}|\\begin\{tikzpicture\}([\s\S]*?)\\end\{tikzpicture\}/gu,
-    (todo) => {
-      if (!todo.includes('tikzpicture')) return todo;
-      const legenda = /\\caption\s*\{([^{}]*)\}/u.exec(todo)?.[1]?.trim();
-      return `\n\n> **Figura (TikZ)**${legenda ? ` — ${legenda}` : ''}\n>\n> _O desenho aparece ao compilar o LaTeX; a prévia não roda TikZ._\n\n`;
-    },
-  );
 
   corpo = convertTabular(corpo);
   corpo = convertLists(corpo);

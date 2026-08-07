@@ -586,6 +586,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: '',
       reasoning: '',
       status: 'streaming',
+      // O relógio começa no envio, não no primeiro token: o tempo de espera
+      // faz parte do turno, e escondê-lo daria uma velocidade otimista.
+      startedAt: Date.now(),
       createdAt: Date.now(),
     };
     const controller = new AbortController();
@@ -816,6 +819,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             updateAssistant((current) => ({
               ...current,
               status: 'error',
+              finishedAt: Date.now(),
               errorCode: streamError.code,
               errorMessage: message,
             }));
@@ -828,7 +832,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ?? 'stop';
             updateAssistant((message) => message.status === 'error'
               ? message
-              : { ...message, status: 'complete', finishReason, truncated: envelope.truncated === true });
+              : { ...message, status: 'complete', finishReason, finishedAt: Date.now(), truncated: envelope.truncated === true });
             set((state) => {
               const messages = state.messagesByConversation[conversationId as string] ?? [];
               const totalCostUsd = conversationCost(messages);
@@ -846,10 +850,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (!isCurrentSession(epoch)) return;
       const aborted = controller.signal.aborted || get().streamAbortRequested;
       if (aborted) {
-        updateAssistant((message) => message.status === 'streaming' ? { ...message, status: 'aborted', finishReason: 'aborted' } : message);
+        updateAssistant((message) => message.status === 'streaming' ? { ...message, status: 'aborted', finishReason: 'aborted', finishedAt: Date.now() } : message);
       } else {
         const message = errorMessage(error);
-        updateAssistant((current) => ({ ...current, status: 'error', errorMessage: message }));
+        updateAssistant((current) => ({ ...current, status: 'error', errorMessage: message, finishedAt: Date.now() }));
         set({ error: message });
       }
     } finally {
@@ -889,7 +893,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...state.messagesByConversation,
             [state.streamingConversationId]: (state.messagesByConversation[state.streamingConversationId] ?? []).map((message) =>
               message.id === streamingMessageId && message.status === 'streaming'
-                ? { ...message, status: 'aborted', finishReason: 'aborted' }
+                ? { ...message, status: 'aborted', finishReason: 'aborted', finishedAt: Date.now() }
                 : message,
             ),
           }

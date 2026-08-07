@@ -265,6 +265,9 @@ export interface ChatMessage {
   /** Estágios da cadeia Science, guardados NA mensagem: quem reabre a conversa
    *  precisa saber por quantas mãos aquele texto passou. */
   scienceStages?: ScienceStageEvent[];
+  /** Início e fim do turno, para o velocímetro medir a velocidade exata. */
+  startedAt?: number;
+  finishedAt?: number;
   /** Log do turno. Só do cliente: é diagnóstico da sessão, não histórico. */
   trace?: TraceEvent[];
   /** Só durante a geração: não é persistido, é processo e não produto. */

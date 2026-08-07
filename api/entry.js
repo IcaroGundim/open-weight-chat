@@ -4362,8 +4362,13 @@ function entregaComoArtefato(formato) {
     "o documento inteiro",
     "</artifact>",
     "",
-    "Fora do artefato, escreva no m\xE1ximo duas frases dizendo o que o documento cobre.",
-    "N\xE3o repita o conte\xFAdo fora dele, e n\xE3o parta o documento em v\xE1rios artefatos: \xE9 um s\xF3."
+    "Fora do artefato, escreva **no m\xE1ximo duas frases** dizendo o que o documento cobre. Nada al\xE9m disso.",
+    "",
+    "**O erro mais comum aqui \xE9 escrever o documento duas vezes** \u2014 uma dentro da tag e outra fora, no corpo",
+    "da mensagem. O corpo \xE9 o que o leitor v\xEA primeiro, ent\xE3o o resultado \xE9 um documento gigante no chat com",
+    "uma c\xF3pia dele no painel ao lado. Depois de fechar `</artifact>`, pare de escrever.",
+    "",
+    "N\xE3o parta o documento em v\xE1rios artefatos: \xE9 um s\xF3."
   ].join("\n");
 }
 var REVISAO = {
@@ -5061,6 +5066,7 @@ var ORPHAN_ATTACHMENT_MS = 24 * 60 * 60 * 1e3;
 var MAX_SEARCH_ROUNDS = 3;
 var MAX_DESCARTE_APOS_MARCADOR = 4e3;
 var MIN_SCIENCE_ARTIFACT_CHARS = 1200;
+var MAX_SCIENCE_PROSE_CHARS = 600;
 try {
   process.loadEnvFile(process.env.ENV_FILE ?? ".env");
 } catch {
@@ -6474,6 +6480,23 @@ ${artifactMarker(slug, versao)}`;
                   "documento guardado pelo servidor",
                   `${kind}${language ? `/${language}` : ""} \xB7 v${versao} \xB7 ${documento.length} caracteres`
                 );
+              }
+              if (cadeia && producedVersions.length > 0) {
+                const marcadores = producedVersions.map((item) => artifactMarker(item.slug, item.version));
+                let prosa = content;
+                for (const marcador of marcadores) prosa = prosa.split(marcador).join("");
+                if (prosa.trim().length > MAX_SCIENCE_PROSE_CHARS) {
+                  const apresentacao = prosa.trim().split(/(?<=[.!?])\s+/u).slice(0, 2).join(" ").slice(0, 320);
+                  content = `${apresentacao}
+
+${marcadores.join("\n\n")}`;
+                  await trace(
+                    stream,
+                    "artefato",
+                    "prosa duplicada removida da mensagem",
+                    `${prosa.trim().length} caracteres fora do artefato`
+                  );
+                }
               }
               if (falhasDeEstagio.length > 0) {
                 const aviso = `

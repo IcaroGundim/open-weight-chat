@@ -214,8 +214,13 @@ function entregaComoArtefato(formato: ScienceFormat): string {
     'o documento inteiro',
     '</artifact>',
     '',
-    'Fora do artefato, escreva no máximo duas frases dizendo o que o documento cobre.',
-    'Não repita o conteúdo fora dele, e não parta o documento em vários artefatos: é um só.',
+    'Fora do artefato, escreva **no máximo duas frases** dizendo o que o documento cobre. Nada além disso.',
+    '',
+    '**O erro mais comum aqui é escrever o documento duas vezes** — uma dentro da tag e outra fora, no corpo',
+    'da mensagem. O corpo é o que o leitor vê primeiro, então o resultado é um documento gigante no chat com',
+    'uma cópia dele no painel ao lado. Depois de fechar `</artifact>`, pare de escrever.',
+    '',
+    'Não parta o documento em vários artefatos: é um só.',
   ].join('\n');
 }
 

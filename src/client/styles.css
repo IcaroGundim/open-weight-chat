@@ -701,6 +701,34 @@ body[data-redimensionando] .artifact-resizer-alca { opacity: 1; background: var(
 /* Falha do provedor é o que se procura num log: fica em vinho. */
 .trace-log-lista li[data-escopo="provedor"] .trace-log-escopo { color: var(--wine); }
 
+/* Figura TikZ desenhada na prévia. As cores saem dos tokens, e não do que o
+   LaTeX declare: o documento foi escrito sem saber em que tema seria lido. */
+.tikz-figura { margin: 20px 0; padding: 0; text-align: center; }
+.tikz-figura-vazia { text-align: left; }
+.tikz-svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.tikz-traco { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
+.tikz-traco[data-tracejado] { stroke-dasharray: 5 4; }
+.tikz-ponta { fill: var(--ink-2); }
+.tikz-no { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.5; }
+.tikz-no[data-tracejado] { stroke-dasharray: 5 4; }
+.tikz-rotulo { fill: var(--ink); font-size: 13px; }
+.tikz-rotulo-aresta { fill: var(--ink-3); font-size: 12px; }
+.tikz-figura figcaption { margin-top: 8px; color: var(--ink-3); font-size: 12px; }
+.tikz-aviso { margin: 6px 0 0; color: var(--ink-3); font-size: 12px; }
+
+/* Velocímetro de tokens por segundo. */
+.velocimetro { display: inline-flex; align-items: center; gap: 6px; }
+.velocimetro-trilho { fill: none; stroke: var(--rule); stroke-width: 3; stroke-linecap: round; }
+.velocimetro-arco { fill: none; stroke: var(--ink-3); stroke-width: 3; stroke-linecap: round; }
+/* Vinho só enquanto está gerando: é sinalização de estado, e um velocímetro
+   parado depois do turno não precisa chamar atenção. */
+.velocimetro[data-vivo] .velocimetro-arco { stroke: var(--wine); }
+.velocimetro-ponteiro { stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; transition: transform 0.4s ease; }
+.velocimetro-eixo { fill: var(--ink); }
+.velocimetro-leitura { display: inline-flex; align-items: baseline; gap: 3px; }
+.velocimetro-leitura b { color: var(--ink-2); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.velocimetro-leitura small { color: var(--ink-3); font-size: 12px; }
+
 /* --- Modo Science ------------------------------------------------------- */
 
 .science-picker { position: relative; }

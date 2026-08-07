@@ -6,6 +6,7 @@ import { highlightCode, normalizeCodeLanguage } from './highlighter';
 import { hasMathSyntax, prepareMarkdownForRender } from './math-normalize';
 import { codeSpansToMath } from './formula-code';
 import { MermaidRenderer } from './MermaidRenderer';
+import { TikzView } from './TikzView';
 import type { StreamErrorEnvelope } from '../types';
 
 type MarkdownProps = {
@@ -61,6 +62,26 @@ function SafeLink({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorE
  */
 function isMermaidFence(language?: string): boolean {
   return (language ?? '').trim().toLowerCase() === 'mermaid';
+}
+
+function isTikzFence(language?: string): boolean {
+  return (language ?? '').trim().toLowerCase() === 'tikz';
+}
+
+/**
+ * A cerca ```tikz carrega a legenda na primeira linha, quando existe.
+ *
+ * O `\caption` do LaTeX fica fora do `tikzpicture`, e a cerca só transporta
+ * um bloco de texto — a primeira linha é o lugar mais simples de pôr a
+ * legenda sem inventar um formato.
+ */
+function separarLegenda(codigo: string): { caption: string | null; source: string } {
+  const linhas = codigo.split('\n');
+  const primeira = linhas[0]?.trim() ?? '';
+  if (primeira && !primeira.startsWith('\\')) {
+    return { caption: primeira, source: linhas.slice(1).join('\n') };
+  }
+  return { caption: null, source: codigo };
 }
 
 function CodeBlock({ code, language, streaming, onPromoteCode }: CodeBlockProps) {
@@ -128,6 +149,10 @@ function MarkdownPre({ children, streaming, onPromoteCode }: { children?: ReactN
     const language = typeof codeProps.className === 'string'
       ? codeProps.className.replace(/^language-/, '')
       : undefined;
+    if (isTikzFence(language) && !streaming) {
+      const { caption, source } = separarLegenda(code);
+      return <TikzView source={source} caption={caption} />;
+    }
     if (isMermaidFence(language) && !streaming) {
       return (
         <figure className="markdown-figura">

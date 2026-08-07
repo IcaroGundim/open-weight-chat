@@ -126,3 +126,13 @@ describe('estrutura do texto', () => {
     }
   });
 });
+
+describe('entrega do documento', () => {
+  it('o revisor é avisado do erro de escrever o documento duas vezes', () => {
+    // Repetir o documento fora da tag põe um texto gigante no chat com uma
+    // cópia no painel — e o corpo da mensagem é o que se lê primeiro.
+    const prompt = SCIENCE_CHAINS.basic.stages[1].systemPrompt('markdown');
+    expect(prompt).toContain('escrever o documento duas vezes');
+    expect(prompt).toContain('pare de escrever');
+  });
+});
