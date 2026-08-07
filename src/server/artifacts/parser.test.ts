@@ -35,4 +35,11 @@ describe('artifact parser', () => {
     const events = parseInChunks('<artifact-update id="demo"><find>a</find><replace>b</replace><find>c</find><replace>d</replace></artifact-update>');
     expect(events).toEqual([{ kind: 'artifact_patch', slug: 'demo', edits: [{ find: 'a', replace: 'b' }, { find: 'c', replace: 'd' }] }]);
   });
+
+  it('accepts a native spreadsheet artifact across chunk boundaries', () => {
+    const input = '<artifact id="pg" type="spreadsheet" title="PG">{"filename":"pg.xlsx","sheets":[{"name":"PG","rows":[[1,2]]}]}</artifact>';
+    const events = parseInChunks(input, 1);
+    expect(events.find((event) => event.kind === 'artifact_open')).toMatchObject({ type: 'spreadsheet', slug: 'pg' });
+    expect(events.flatMap((event) => event.kind === 'artifact_body' ? [event.text] : []).join('')).toContain('pg.xlsx');
+  });
 });

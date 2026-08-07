@@ -1,6 +1,10 @@
 import { ApiError, authHeaders } from './token-provider';
 import { isEffortLevel } from './types';
 import type {
+  Attachment,
+  ScienceDraft,
+  ScienceStageEvent,
+  TraceEvent,
   ChatMessage,
   ChatRequest,
   EffortLevel,
@@ -15,10 +19,16 @@ import type {
   ModelOption,
   ProviderModelInput,
   ProviderSettings,
+  SearchEndEnvelope,
+  SearchResult,
+  SearchSettings,
+  SearchStartEnvelope,
   SecretStorageStatus,
   StreamEnvelope,
   StreamErrorEnvelope,
   StreamUsageEnvelope,
+  SpreadsheetWorkbook,
+  SpreadsheetReadyEnvelope,
   Usage,
 } from './types';
 
@@ -58,6 +68,28 @@ function contentToString(value: unknown): string {
       return asString(part.text) || asString(part.content);
     })
     .join('');
+}
+
+function normalizeAttachment(value: unknown): Attachment | null {
+  if (!isRecord(value)) return null;
+  const id = asString(value.id);
+  const kind = asString(value.kind);
+  if (!id || (kind !== 'image' && kind !== 'document' && kind !== 'spreadsheet')) return null;
+  const spreadsheet = isRecord(value.spreadsheet) ? value.spreadsheet : undefined;
+  return {
+    id,
+    kind,
+    filename: asString(value.filename, 'arquivo'),
+    mime: asString(value.mime, 'application/octet-stream'),
+    sizeBytes: asNumber(value.sizeBytes ?? value.size_bytes) ?? 0,
+    textChars: asNumber(value.textChars ?? value.text_chars) ?? null,
+    truncated: asBoolean(value.truncated) ?? false,
+    ...(spreadsheet ? { spreadsheet: {
+      sheetNames: Array.isArray(spreadsheet.sheetNames) ? spreadsheet.sheetNames.filter((name): name is string => typeof name === 'string') : [],
+      version: asNumber(spreadsheet.version) ?? 1,
+    } } : {}),
+    createdAt: asNumber(value.createdAt ?? value.created_at) ?? 0,
+  };
 }
 
 function firstRecord(...values: unknown[]): JsonRecord | undefined {
@@ -128,6 +160,9 @@ function normalizeMessage(value: unknown, index: number, conversationId?: string
     errorMessage: asString(value.error_message ?? value.errorMessage) || undefined,
     finishReason: asString(value.finish_reason ?? value.finishReason) || undefined,
     createdAt: (value.created_at ?? value.createdAt) as string | number | undefined,
+    attachments: Array.isArray(value.attachments)
+      ? value.attachments.map(normalizeAttachment).filter((attachment): attachment is Attachment => Boolean(attachment))
+      : undefined,
   };
 }
 
@@ -150,7 +185,7 @@ function normalizeConversation(value: unknown, index: number): Conversation | nu
   };
 }
 
-const artifactKinds: ArtifactKind[] = ['markdown', 'code', 'svg', 'mermaid'];
+const artifactKinds: ArtifactKind[] = ['markdown', 'code', 'svg', 'mermaid', 'mindmap', 'chart'];
 const artifactOperations: ArtifactOperation[] = ['create', 'rewrite', 'update'];
 
 function normalizeArtifactVersion(value: unknown): Artifact['versions'][number] | null {
@@ -451,9 +486,20 @@ export async function getConversation(id: string): Promise<{ conversation?: Conv
       headers: { Accept: 'application/json' },
     });
     const conversationPayload = unwrapPayload(payload, ['conversation']);
+    let messages = normalizeMessages(payload, id);
+    // A API atual separa metadados e mensagens. O fallback acima continua
+    // aceitando servidores antigos que devolviam tudo no primeiro endpoint.
+    try {
+      const messagePayload = await requestJson(`/api/conversations/${encodeURIComponent(id)}/messages`, {
+        headers: { Accept: 'application/json' },
+      });
+      messages = normalizeMessages(messagePayload, id);
+    } catch (messageError) {
+      if (!(messageError instanceof ApiError) || messageError.status !== 404) throw messageError;
+    }
     return {
       conversation: normalizeConversation(conversationPayload, 0) ?? undefined,
-      messages: normalizeMessages(payload, id),
+      messages,
     };
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 404) throw error;
@@ -469,6 +515,25 @@ export async function getArtifacts(conversationId: string): Promise<Artifact[]> 
     headers: { Accept: 'application/json' },
   });
   return normalizeArtifacts(payload, conversationId);
+}
+
+/**
+ * Grava a fonte editada à mão e devolve a versão criada.
+ *
+ * Sempre uma versão nova: o histórico é o que torna seguro editar, porque
+ * permite voltar ao que o modelo escreveu.
+ */
+export async function saveArtifactContent(
+  conversationId: string,
+  slug: string,
+  content: string,
+): Promise<Artifact['versions'][number] | undefined> {
+  const payload = await requestJson(
+    `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(slug)}`,
+    { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify({ content }) },
+  );
+  const root = unwrapPayload(payload, ['version', 'artifactVersion', 'data']);
+  return normalizeArtifactVersion(root) ?? undefined;
 }
 
 export async function getArtifactVersion(
@@ -571,6 +636,12 @@ export interface ChatStreamHandlers {
   onArtifactStart?: (artifact: ArtifactStartEnvelope) => void;
   onArtifactDelta?: (artifact: ArtifactDeltaEnvelope) => void;
   onArtifactEnd?: (artifact: ArtifactEndEnvelope) => void;
+  onSpreadsheetReady?: (event: SpreadsheetReadyEnvelope) => void;
+  onScienceStage?: (stage: ScienceStageEvent) => void;
+  onTrace?: (event: TraceEvent) => void;
+  onScienceDelta?: (draft: ScienceDraft) => void;
+  onSearchStart?: (search: SearchStartEnvelope) => void;
+  onSearchEnd?: (search: SearchEndEnvelope) => void;
   onUsage?: (usage: Usage) => void;
   onError?: (error: StreamErrorEnvelope) => void;
   onDone?: (envelope: StreamEnvelope) => void;
@@ -582,6 +653,144 @@ function asStreamEnvelope(value: unknown): StreamEnvelope | null {
   const nested = isRecord(value.data) ? value.data : undefined;
   const source = nested ? { ...value, ...nested } : value;
   return { ...(source as StreamEnvelope), type };
+}
+
+/** Configuração de busca do usuário. A chave nunca volta — só `hasKey`. */
+export async function getSearchSettings(): Promise<{ settings: SearchSettings | null; secretStorage: SecretStorageStatus }> {
+  const payload = await requestJson('/api/search-settings', { headers: JSON_HEADERS });
+  const record = isRecord(payload) ? payload : {};
+  return {
+    settings: (record.settings ?? null) as SearchSettings | null,
+    secretStorage: (record.secretStorage ?? { available: false, reason: null }) as SecretStorageStatus,
+  };
+}
+
+export async function putSearchSettings(input: {
+  backend: SearchSettings['backend'];
+  baseURL?: string;
+  /** null apaga a chave; undefined mantém a que já está guardada. */
+  apiKey?: string | null;
+  maxResults?: number;
+  enabled?: boolean;
+}): Promise<SearchSettings | null> {
+  const payload = await requestJson('/api/search-settings', {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(input),
+  });
+  return (isRecord(payload) ? payload.settings : null) as SearchSettings | null;
+}
+
+export async function deleteSearchSettings(): Promise<void> {
+  await requestJson('/api/search-settings', { method: 'DELETE', headers: JSON_HEADERS });
+}
+
+/**
+ * Prova a configuração com uma consulta real.
+ *
+ * Sem isto, um erro de chave ou de URL só apareceria no meio de uma conversa,
+ * quando o modelo já parou para esperar.
+ */
+export async function testSearchSettings(): Promise<SearchResult[]> {
+  const payload = await requestJson('/api/search-settings/test', { method: 'POST', headers: JSON_HEADERS });
+  const record = isRecord(payload) ? payload : {};
+  return Array.isArray(record.results) ? (record.results as SearchResult[]) : [];
+}
+
+/**
+ * Sobe um arquivo e devolve o anexo já reconhecido pelo servidor.
+ *
+ * Base64 em JSON, e não multipart: na Vercel o corpo da requisição é
+ * reconstruído a partir do que a plataforma já leu, e esse caminho só é
+ * confiável para JSON — binário de multipart seria corrompido no caminho
+ * (ver requestWithRestoredBody em vercel-handler.ts). O custo é ~33% de
+ * volume a mais, já embutido no limite por arquivo.
+ */
+export async function uploadAttachment(file: File): Promise<Attachment> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // Em blocos: `String.fromCharCode(...bytes)` estoura a pilha em arquivos de
+  // alguns megabytes, e o erro aparece como "Maximum call stack size exceeded"
+  // sem nenhuma relação aparente com upload.
+  let binario = '';
+  const BLOCO = 0x8000;
+  for (let i = 0; i < bytes.length; i += BLOCO) {
+    binario += String.fromCharCode(...bytes.subarray(i, i + BLOCO));
+  }
+  const payload = await requestJson('/api/attachments', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      filename: file.name || 'arquivo',
+      mime: file.type || 'application/octet-stream',
+      data: btoa(binario),
+    }),
+  });
+  const record = isRecord(payload) && isRecord(payload.attachment) ? payload.attachment : {};
+  return record as unknown as Attachment;
+}
+
+export async function deleteAttachment(id: string): Promise<void> {
+  await requestJson(`/api/attachments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** URL dos bytes da imagem. Autenticada pela mesma sessão das demais rotas. */
+export function attachmentUrl(id: string): string {
+  return `/api/attachments/${encodeURIComponent(id)}`;
+}
+
+export async function getSpreadsheet(id: string, version?: number): Promise<{ attachment: Attachment; workbook: SpreadsheetWorkbook; version: number; currentVersion: number }> {
+  const query = version === undefined ? '' : `?version=${version}`;
+  const payload = await requestJson(`/api/attachments/${encodeURIComponent(id)}/spreadsheet${query}`);
+  if (!isRecord(payload) || !isRecord(payload.attachment) || !isRecord(payload.workbook) || typeof payload.version !== 'number' || typeof payload.currentVersion !== 'number') {
+    throw new ApiError('A resposta da planilha veio em formato inválido.', 500);
+  }
+  return {
+    attachment: payload.attachment as unknown as Attachment,
+    workbook: payload.workbook as unknown as SpreadsheetWorkbook,
+    version: payload.version,
+    currentVersion: payload.currentVersion,
+  };
+}
+
+export async function saveSpreadsheet(
+  id: string,
+  workbook: SpreadsheetWorkbook,
+  baseVersion: number,
+): Promise<{ workbook: SpreadsheetWorkbook; version: number }> {
+  const payload = await requestJson(`/api/attachments/${encodeURIComponent(id)}/spreadsheet`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ workbook, baseVersion }),
+  });
+  if (!isRecord(payload) || !isRecord(payload.workbook) || typeof payload.version !== 'number') {
+    throw new ApiError('A resposta ao salvar a planilha veio em formato inválido.', 500);
+  }
+  return { workbook: payload.workbook as unknown as SpreadsheetWorkbook, version: payload.version };
+}
+
+export async function downloadSpreadsheet(id: string, format: 'xlsx' | 'csv', sheet?: string, version?: number): Promise<void> {
+  const query = new URLSearchParams({ format });
+  if (sheet) query.set('sheet', sheet);
+  if (version !== undefined) query.set('version', String(version));
+  const response = await fetch(`/api/attachments/${encodeURIComponent(id)}/spreadsheet/export?${query}`, {
+    headers: await authHeaders(),
+  });
+  if (!response.ok) {
+    const payload = await readJson(response);
+    const record = isRecord(payload) ? payload : undefined;
+    throw new ApiError(asString(firstRecord(record?.error, record)?.message, 'Não consegui exportar a planilha.'), response.status);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const filename = disposition.match(/filename="([^"]+)"/u)?.[1] ?? `planilha.${format}`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function streamChat(
@@ -683,6 +892,83 @@ export async function streamChat(
       }
       return;
     }
+    if (type === 'trace') {
+      const scope = asString(envelope.scope);
+      const evento = asString(envelope.event);
+      if (!scope || !evento) return;
+      handlers.onTrace?.({
+        scope,
+        event: evento,
+        detail: asString(envelope.detail) || undefined,
+        at: asNumber(envelope.at) ?? 0,
+      });
+      return;
+    }
+    if (type === 'science_delta') {
+      const role = asString(envelope.role) as ScienceDraft['role'];
+      const text = asString(envelope.text);
+      if (!role || !text) return;
+      // `StreamEnvelope.reasoning` já é declarado como string (o campo do
+      // envelope de raciocínio comum), então a leitura precisa ignorar esse
+      // tipo em vez de comparar contra ele.
+      const ehRaciocinio = (envelope as Record<string, unknown>).reasoning === true;
+      handlers.onScienceDelta?.({
+        role,
+        index: asNumber(envelope.index) ?? 1,
+        text: ehRaciocinio ? '' : text,
+        reasoning: ehRaciocinio ? text : '',
+      });
+      return;
+    }
+    if (type === 'science_stage') {
+      // `flush()` antes, como na busca: o progresso não pode aparecer acima do
+      // texto que já tinha sido escrito.
+      flush();
+      const label = asString(envelope.label);
+      const role = asString(envelope.role) as ScienceStageEvent['role'];
+      if (!label || !role) return;
+      handlers.onScienceStage?.({
+        role,
+        label,
+        index: asNumber(envelope.index) ?? 1,
+        total: asNumber(envelope.total) ?? 1,
+        status: envelope.status === 'done' ? 'done' : 'start',
+      });
+      return;
+    }
+    if (type === 'search_start' || type === 'search_end') {
+      // `flush()` antes: o texto que o modelo escreveu ANTES de pedir a busca
+      // precisa aparecer primeiro, senão o cartão da busca surge acima de uma
+      // frase que já tinha sido digitada.
+      flush();
+      const query = asString(envelope.query);
+      const round = asNumber(envelope.round) ?? 1;
+      if (!query) return;
+      if (type === 'search_start') {
+        handlers.onSearchStart?.({ type: 'search_start', query, round });
+        return;
+      }
+      const brutos = Array.isArray(envelope.results) ? envelope.results : [];
+      const results = brutos.flatMap((item) => {
+        if (!isRecord(item)) return [];
+        const url = asString(item.url);
+        if (!url) return [];
+        return [{
+          title: asString(item.title, url),
+          url,
+          snippet: asString(item.snippet),
+          publishedAt: asString(item.publishedAt) || null,
+        }];
+      });
+      handlers.onSearchEnd?.({
+        type: 'search_end',
+        query,
+        round,
+        results,
+        failure: asString(envelope.failure) || null,
+      });
+      return;
+    }
     if (type === 'artifact_start') {
       flush();
       const kind = asString(envelope.kind) as ArtifactKind;
@@ -724,6 +1010,14 @@ export async function streamChat(
           outputTokens: asNumber(envelope.outputTokens ?? envelope.output_tokens) ?? null,
           costUsd: asNumber(envelope.costUsd ?? envelope.cost_usd) ?? null,
         });
+      }
+      return;
+    }
+    if (type === 'spreadsheet_ready') {
+      flush();
+      const attachment = normalizeAttachment(envelope.attachment);
+      if (attachment?.kind === 'spreadsheet') {
+        handlers.onSpreadsheetReady?.({ type: 'spreadsheet_ready', attachment });
       }
       return;
     }

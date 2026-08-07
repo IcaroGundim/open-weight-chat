@@ -3,6 +3,7 @@ import {
   Check,
   Cpu,
   Database,
+  Globe,
   Moon,
   Palette,
   Plug,
@@ -13,11 +14,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ProviderSettingsTab } from './ProviderSettingsTab';
+import { SearchSettingsTab } from './SearchSettingsTab';
 import { useSettingsStore } from '../store/settings';
 import { EFFORT_HINT, EFFORT_LABEL, EFFORT_LEVELS, isEffortLevel } from '../types';
 import type { DensityMode, ModelOption, ThemeMode } from '../types';
 
-type SettingsTab = 'appearance' | 'model' | 'providers' | 'data';
+type SettingsTab = 'appearance' | 'model' | 'providers' | 'search' | 'data';
 
 type SettingsPanelProps = {
   models: ModelOption[];
@@ -30,6 +32,7 @@ const tabs: Array<{ id: SettingsTab; label: string; hint: string; icon: LucideIc
   { id: 'appearance', label: 'Aparência', hint: 'Tema e leitura', icon: Palette },
   { id: 'model', label: 'Modelo', hint: 'Padrão e acesso', icon: Cpu },
   { id: 'providers', label: 'Provedores', hint: 'APIs e chaves', icon: Plug },
+  { id: 'search', label: 'Busca', hint: 'Consulta à web', icon: Globe },
   { id: 'data', label: 'Dados locais', hint: 'Privacidade e reset', icon: Database },
 ];
 
@@ -282,6 +285,8 @@ export function SettingsPanel({ models, selectedModelId, onModelChange, onClose 
             ) : null}
 
             {activeTab === 'providers' ? <ProviderSettingsTab /> : null}
+
+            {activeTab === 'search' ? <SearchSettingsTab /> : null}
 
             {activeTab === 'data' ? (
               <div id="settings-panel-data" role="tabpanel" aria-labelledby="settings-tab-data">

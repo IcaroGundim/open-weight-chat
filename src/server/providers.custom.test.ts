@@ -6,17 +6,26 @@ function withConfig(value: unknown): void {
   resetProvidersCache();
 }
 
+/**
+ * Gateway fictício, de propósito.
+ *
+ * Este arquivo já usou o OpenCode como exemplo, o que deixou de servir quando
+ * ele virou provedor embutido: metade dos testes aqui verifica que uma
+ * configuração inválida faz o provedor **sumir** do catálogo, e um id embutido
+ * nunca some — o embutido reaparece por baixo e o teste passaria a medir outra
+ * coisa. O exemplo precisa ser um id que só exista se o arquivo custom o criar.
+ */
 const validProvider = {
-  id: 'opencode',
-  label: 'OpenCode Zen',
-  baseURL: 'https://opencode.ai/zen/v1',
-  apiKeyEnv: 'OPENCODE_API_KEY',
-  models: [{ id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', ctx: 272_000, reasoning: true }],
+  id: 'meu-gateway',
+  label: 'Meu Gateway',
+  baseURL: 'https://gateway.exemplo.com/v1',
+  apiKeyEnv: 'MEU_GATEWAY_API_KEY',
+  models: [{ id: 'modelo-rapido', label: 'Modelo Rápido', ctx: 272_000, reasoning: true }],
 };
 
 afterEach(() => {
   delete process.env.CUSTOM_PROVIDERS;
-  delete process.env.OPENCODE_API_KEY;
+  delete process.env.MEU_GATEWAY_API_KEY;
   resetProvidersCache();
 });
 
@@ -26,14 +35,14 @@ describe('provedores personalizados', () => {
     // no corpo do módulo, esta variável chegaria tarde demais — que é
     // exatamente o que aconteceria em dev, onde .env carrega depois dos imports.
     withConfig([validProvider]);
-    expect(getProvider('opencode')?.baseURL).toBe('https://opencode.ai/zen/v1');
-    expect(getModel('opencode', 'gpt-5.6-luna')?.ctx).toBe(272_000);
+    expect(getProvider('meu-gateway')?.baseURL).toBe('https://gateway.exemplo.com/v1');
+    expect(getModel('meu-gateway', 'modelo-rapido')?.ctx).toBe(272_000);
   });
 
   it('expõe o provedor no catálogo marcado como custom e sem verificação', () => {
     withConfig([validProvider]);
     const catalog = getModelsCatalog();
-    const provider = catalog.providers.find((item) => item.id === 'opencode');
+    const provider = catalog.providers.find((item) => item.id === 'meu-gateway');
     expect(provider?.source).toBe('custom');
     expect(provider?.configured).toBe(false);
     // Sem verifiedAt declarado, entra como não verificado — os preços são do usuário.
@@ -43,9 +52,9 @@ describe('provedores personalizados', () => {
   });
 
   it('marca como configurado quando a variável de ambiente da chave existe', () => {
-    process.env.OPENCODE_API_KEY = 'chave-de-teste';
+    process.env.MEU_GATEWAY_API_KEY = 'chave-de-teste';
     withConfig([validProvider]);
-    expect(getModelsCatalog().providers.find((item) => item.id === 'opencode')?.configured).toBe(true);
+    expect(getModelsCatalog().providers.find((item) => item.id === 'meu-gateway')?.configured).toBe(true);
   });
 
   it('recusa chave colada dentro do JSON, nomeando o campo', () => {
@@ -53,13 +62,13 @@ describe('provedores personalizados', () => {
     const [error] = getModelsCatalog().configErrors;
     expect(error).toContain('apiKey');
     expect(error).toContain('apiKeyEnv');
-    expect(getProvider('opencode')).toBeUndefined();
+    expect(getProvider('meu-gateway')).toBeUndefined();
   });
 
   it('recusa modelo sem janela de contexto', () => {
     withConfig([{ ...validProvider, models: [{ id: 'sem-ctx', label: 'Sem ctx' }] }]);
     expect(getModelsCatalog().configErrors[0]).toContain('ctx');
-    expect(getProvider('opencode')).toBeUndefined();
+    expect(getProvider('meu-gateway')).toBeUndefined();
   });
 
   it('recusa colisão com id embutido, nomeando o id', () => {
@@ -79,7 +88,7 @@ describe('provedores personalizados', () => {
 
   it('deixa o preço nulo quando não é declarado, sem inventar zero', () => {
     withConfig([validProvider]);
-    const pricing = getModel('opencode', 'gpt-5.6-luna')?.pricing;
+    const pricing = getModel('meu-gateway', 'modelo-rapido')?.pricing;
     expect(pricing).toEqual({ inputPerMillion: null, cachedInputPerMillion: null, outputPerMillion: null });
   });
 });

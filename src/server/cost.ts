@@ -41,6 +41,51 @@ function nestedNumber(object: ProviderUsageLike, paths: string[][]): number | un
   return undefined;
 }
 
+/**
+ * Soma o uso informado por vários rounds do mesmo turno.
+ *
+ * Uma resposta com busca chama o provedor mais de uma vez, e cada chamada é
+ * cobrada. Ficar com o uso do último round faria o custo aparecer menor do que
+ * foi — e custo que mente é pior do que custo ausente (ver PLANO.md).
+ *
+ * Um campo só entra na soma quando **todos** os rounds o informaram. Se algum
+ * round não reportou `prompt_tokens`, por exemplo, somar os demais daria um
+ * número autoritativo e errado; omitir o campo devolve o cálculo à estimativa
+ * sobre o texto acumulado, que é aproximada mas honesta — e a estimativa já se
+ * anuncia como tal via `costEstimated`.
+ */
+const CAMPOS_SOMAVEIS = [
+  'prompt_tokens',
+  'completion_tokens',
+  'reasoning_tokens',
+  'cached_tokens',
+  'total_tokens',
+] as const;
+
+export function sumProviderUsage(rounds: readonly (ProviderUsageLike | null)[]): ProviderUsageLike | null {
+  const informados = rounds.filter((round): round is ProviderUsageLike => Boolean(round));
+  if (informados.length === 0) return null;
+  // Um round que não reportou nada conta como lacuna: nenhum campo pode ser
+  // dado como completo.
+  if (informados.length !== rounds.length) return null;
+
+  const soma: Record<string, number> = {};
+  for (const campo of CAMPOS_SOMAVEIS) {
+    let total = 0;
+    let completo = true;
+    for (const round of informados) {
+      const valor = nestedNumber(round, [[campo]]);
+      if (valor === undefined) {
+        completo = false;
+        break;
+      }
+      total += valor;
+    }
+    if (completo) soma[campo] = total;
+  }
+  return Object.keys(soma).length > 0 ? soma : null;
+}
+
 export function normalizeUsage(input: UsageInput): Usage {
   const raw = input.raw ?? {};
   const rawPrompt = nestedNumber(raw, [['prompt_tokens'], ['input_tokens'], ['promptTokens']]);

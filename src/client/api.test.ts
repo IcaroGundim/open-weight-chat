@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, streamChat } from './api';
+import { ApiError, getConversation, streamChat } from './api';
 import { authHeaders, setTokenProvider } from './token-provider';
 
 beforeEach(() => {
@@ -87,6 +87,21 @@ describe('cliente SSE do chat', () => {
       }),
     );
   });
+
+  it('entrega a planilha nativa criada durante o stream', async () => {
+    const attachment = { id: 'sheet-1', kind: 'spreadsheet', filename: 'pg.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sizeBytes: 1200, textChars: null, truncated: false, spreadsheet: { sheetNames: ['PG'], version: 1 }, createdAt: 10 };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: spreadsheet_ready\ndata: ${JSON.stringify({ type: 'spreadsheet_ready', attachment })}\n\nevent: done\ndata: {"type":"done"}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const received: string[] = [];
+    await streamChat(
+      { conversationId: 'c1', content: 'crie', providerId: 'ollama', modelId: 'llama3.2' },
+      { onSpreadsheetReady: (event) => received.push(event.attachment.filename) },
+      new AbortController().signal,
+    );
+    expect(received).toEqual(['pg.xlsx']);
+  });
 });
 
 describe('autenticação do cliente HTTP', () => {
@@ -114,5 +129,24 @@ describe('autenticação do cliente HTTP', () => {
       ),
     ).rejects.toMatchObject({ status: 401 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('carregamento da conversa', () => {
+  it('preserva anexos de planilha ao normalizar mensagens reabertas', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/messages')) return new Response(JSON.stringify({ messages: [{
+        id: 'm1', conversationId: 'c1', role: 'user', content: 'analise', createdAt: 1,
+        attachments: [{ id: 'p1', kind: 'spreadsheet', filename: 'dados.csv', mime: 'text/csv', sizeBytes: 20, textChars: null, truncated: false, spreadsheet: { sheetNames: ['Dados'], version: 3 }, createdAt: 1 }],
+      }] }), { headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ conversation: { id: 'c1', title: 'Dados' } }), { headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await getConversation('c1');
+    expect(result.messages[0].attachments?.[0]).toMatchObject({
+      id: 'p1', kind: 'spreadsheet', spreadsheet: { sheetNames: ['Dados'], version: 3 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

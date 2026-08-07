@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { highlightCode, normalizeCodeLanguage } from './highlighter';
 import { hasMathSyntax, prepareMarkdownForRender } from './math-normalize';
+import { codeSpansToMath } from './formula-code';
+import { MermaidRenderer } from './MermaidRenderer';
 import type { StreamErrorEnvelope } from '../types';
 
 type MarkdownProps = {
@@ -43,6 +45,22 @@ function SafeLink({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorE
       {children}
     </a>
   );
+}
+
+/**
+ * Cerca ```mermaid vira figura, não bloco de código.
+ *
+ * É o mecanismo de ilustração de um documento em Markdown: o agente
+ * ilustrador do modo Science desenha em Mermaid, e sem isto o que ele produz
+ * apareceria como um monte de texto entre crases — a figura existiria no
+ * arquivo e não para quem lê.
+ *
+ * Enquanto o texto ainda está chegando, o diagrama fica como código: um
+ * Mermaid pela metade não compila, e tentar renderizar a cada pedaço faria a
+ * área piscar entre erro e desenho.
+ */
+function isMermaidFence(language?: string): boolean {
+  return (language ?? '').trim().toLowerCase() === 'mermaid';
 }
 
 function CodeBlock({ code, language, streaming, onPromoteCode }: CodeBlockProps) {
@@ -110,6 +128,13 @@ function MarkdownPre({ children, streaming, onPromoteCode }: { children?: ReactN
     const language = typeof codeProps.className === 'string'
       ? codeProps.className.replace(/^language-/, '')
       : undefined;
+    if (isMermaidFence(language) && !streaming) {
+      return (
+        <figure className="markdown-figura">
+          <MermaidRenderer content={code} />
+        </figure>
+      );
+    }
     return <CodeBlock code={code} language={language} streaming={streaming} onPromoteCode={onPromoteCode} />;
   }
   return <pre>{children}</pre>;
@@ -118,7 +143,15 @@ function MarkdownPre({ children, streaming, onPromoteCode }: { children?: ReactN
 type KatexPlugin = (tree: unknown, options?: unknown) => unknown;
 
 function MarkdownRenderer({ source, streaming = false, className = '', onPromoteCode }: MarkdownProps) {
-  const math = useMemo(() => hasMathSyntax(source), [source]);
+  /**
+   * Fórmula escrita entre crases vira matemática ANTES de tudo.
+   *
+   * Precisa vir antes de `hasMathSyntax`, que é quem decide se o KaTeX é
+   * carregado: convertendo depois, a conversão aconteceria e o renderizador
+   * chegaria sem o plugin, deixando `$...$` cru na tela.
+   */
+  const fonte = useMemo(() => codeSpansToMath(source), [source]);
+  const math = useMemo(() => hasMathSyntax(fonte), [fonte]);
   const [katexPlugin, setKatexPlugin] = useState<KatexPlugin | null>(null);
 
   useEffect(() => {
@@ -137,7 +170,7 @@ function MarkdownRenderer({ source, streaming = false, className = '', onPromote
     };
   }, [math, katexPlugin]);
 
-  const renderedSource = useMemo(() => prepareMarkdownForRender(source, streaming), [source, streaming]);
+  const renderedSource = useMemo(() => prepareMarkdownForRender(fonte, streaming), [fonte, streaming]);
   const components = useMemo<Components>(() => ({
     a: SafeLink,
     code: (props) => <MarkdownCode {...(props as Record<string, unknown>)} />,

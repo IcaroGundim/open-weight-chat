@@ -52,4 +52,19 @@ describe('isolamento de sessão do chat', () => {
     expect(state.isLoadingModels).toBe(false);
     expect(state.isLoadingConversations).toBe(false);
   });
+
+  it('fecha a planilha ao trocar ou iniciar uma conversa', async () => {
+    useChatStore.setState({
+      activeConversationId: 'conversa-a',
+      openSpreadsheetId: 'planilha-a',
+      messagesLoaded: { 'conversa-b': true },
+    });
+
+    await useChatStore.getState().selectConversation('conversa-b');
+    expect(useChatStore.getState()).toMatchObject({ activeConversationId: 'conversa-b', openSpreadsheetId: null });
+
+    useChatStore.setState({ openSpreadsheetId: 'planilha-b' });
+    useChatStore.getState().newConversation();
+    expect(useChatStore.getState()).toMatchObject({ activeConversationId: null, openSpreadsheetId: null });
+  });
 });

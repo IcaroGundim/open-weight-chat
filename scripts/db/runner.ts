@@ -49,6 +49,20 @@ export interface Migration {
   version: string;
   name: string;
   up: (run: SqlRunner, ctx: MigrationContext) => Promise<void>;
+  /**
+   * Roda FORA da transação do motor, gerenciando a própria.
+   *
+   * Existe por uma necessidade real do SQLite: reconstruir uma tabela para
+   * relaxar um CHECK exige desligar as chaves estrangeiras, e
+   * `PRAGMA foreign_keys` é silenciosamente ignorado dentro de uma transação.
+   * Sem esta saída, o `DROP TABLE` intermediário dispararia os
+   * `ON DELETE CASCADE` que apontam para a tabela e apagaria dados —
+   * exatamente o tipo de perda que não aparece em teste.
+   *
+   * Quem liga isto assume a atomicidade: uma falha no meio deixa o banco no
+   * estado em que parou, e a migração não é marcada como aplicada.
+   */
+  outsideTransaction?: boolean;
 }
 
 const SCHEMA_MIGRATIONS = `
@@ -305,13 +319,21 @@ export async function migrateUp(
   const result: MigrateUpResult = { applied: [] };
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
-    await run.transaction(async () => {
+    const registrar = () => run.query("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", [
+      migration.version,
+      Date.now(),
+    ]);
+    if (migration.outsideTransaction) {
+      // O registro fica DEPOIS e fora: se a migração falhar no meio, ela não
+      // consta como aplicada e a próxima execução tenta de novo.
       await migration.up(run, ctx);
-      await run.query("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", [
-        migration.version,
-        Date.now(),
-      ]);
-    });
+      await registrar();
+    } else {
+      await run.transaction(async () => {
+        await migration.up(run, ctx);
+        await registrar();
+      });
+    }
     applied.add(migration.version);
     result.applied.push({ version: migration.version, name: migration.name });
     ctx.log(`✔ ${migration.version} ${migration.name}`);

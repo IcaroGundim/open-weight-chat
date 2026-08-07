@@ -44,6 +44,12 @@ const DIALECT_BY_PROVIDER: Readonly<Partial<Record<ProviderId, EffortDialect>>> 
   ollama: 'reasoning_effort',
   openrouter: 'reasoning',
   glm: 'thinking',
+  // O gateway do OpenCode expõe `/chat/completions` pelo mesmo adaptador
+  // openai-compatible que os demais deste grupo. Explícito, e não deixado no
+  // padrão, porque um leitor precisa saber que a escolha foi verificada e não
+  // apenas herdada.
+  opencode: 'reasoning_effort',
+  'opencode-go': 'reasoning_effort',
 };
 
 /** Provedor personalizado cai na convenção mais difundida. */

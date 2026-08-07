@@ -208,6 +208,388 @@ export const PROVIDERS = {
       },
     ],
   },
+
+  /**
+   * OpenCode Zen e OpenCode Go.
+   *
+   * Duas assinaturas do mesmo fornecedor, com a MESMA chave
+   * (`OPENCODE_API_KEY`) e catálogos/preços diferentes — por isso são dois
+   * provedores, e não um com dois modos: `resolveProvider` devolve baseURL por
+   * provedor, e o custo de um modelo depende de qual dos dois atendeu.
+   *
+   * **Só os modelos servidos em `/chat/completions` entram aqui.** O gateway
+   * do OpenCode roteia por família: GPT e parte dos demais respondem em
+   * `/responses` (protocolo Responses da OpenAI), Claude e Qwen em `/messages`
+   * (protocolo da Anthropic) e Gemini em `/models/{id}`. Este app fala
+   * `/chat/completions` e só isso, então listar os outros seria oferecer
+   * modelos que falham em toda mensagem.
+   *
+   * A divisão NÃO segue o nome do modelo: `minimax-m3` é `/chat/completions`
+   * no Zen e `/messages` no Go; `grok-4.5` é o inverso. Por isso a lista é
+   * explícita por provedor, e não uma regra por prefixo — que estaria errada
+   * nos dois casos.
+   *
+   * Preços e endpoints lidos da documentação em 07/08/2026
+   * (opencode.ai/docs/zen e /docs/go) e sujeitos à mesma ressalva dos demais:
+   * revalide antes de tratar como projeção. `ctx` cai em 131.072 onde não há
+   * número verificado — errar para baixo só faz o contexto ser aparado antes
+   * do necessário, enquanto errar para cima faz o provedor recusar a
+   * requisição inteira. `reasoning` aqui é dica de exibição, não capacidade
+   * apurada (ver effort.ts, que de propósito não consulta esse campo).
+   */
+  'opencode': {
+    id: 'opencode',
+    label: 'OpenCode Zen',
+    baseURL: 'https://opencode.ai/zen/v1',
+    apiKeyEnv: 'OPENCODE_API_KEY',
+    requiresApiKey: true,
+    verifiedAt: '2026-08-07',
+    models: [
+      {
+        id: 'big-pickle',
+        label: 'Big Pickle',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'deepseek-v4-flash',
+        label: 'DeepSeek V4 Flash',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.14,
+          cachedInputPerMillion: 0.028,
+          outputPerMillion: 0.28,
+        },
+      },
+      {
+        id: 'deepseek-v4-flash-free',
+        label: 'DeepSeek V4 Flash Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'deepseek-v4-pro',
+        label: 'DeepSeek V4 Pro',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 1.74,
+          cachedInputPerMillion: 0.145,
+          outputPerMillion: 3.48,
+        },
+      },
+      {
+        id: 'glm-5',
+        label: 'GLM 5',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 1.0,
+          cachedInputPerMillion: 0.2,
+          outputPerMillion: 3.2,
+        },
+      },
+      {
+        id: 'glm-5.1',
+        label: 'GLM 5.1',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 1.4,
+          cachedInputPerMillion: 0.26,
+          outputPerMillion: 4.4,
+        },
+      },
+      {
+        id: 'glm-5.2',
+        label: 'GLM 5.2',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 1.4,
+          cachedInputPerMillion: 0.26,
+          outputPerMillion: 4.4,
+        },
+      },
+      {
+        id: 'kimi-k2.5',
+        label: 'Kimi K2.5',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.6,
+          cachedInputPerMillion: 0.1,
+          outputPerMillion: 3.0,
+        },
+      },
+      {
+        id: 'kimi-k2.6',
+        label: 'Kimi K2.6',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.95,
+          cachedInputPerMillion: 0.16,
+          outputPerMillion: 4.0,
+        },
+      },
+      {
+        id: 'kimi-k2.7-code',
+        label: 'Kimi K2.7 Code',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.95,
+          cachedInputPerMillion: 0.19,
+          outputPerMillion: 4.0,
+        },
+      },
+      {
+        id: 'kimi-k3',
+        label: 'Kimi K3',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 3.0,
+          cachedInputPerMillion: 0.3,
+          outputPerMillion: 15.0,
+        },
+      },
+      {
+        id: 'laguna-s-2.1-free',
+        label: 'Laguna S 2.1 Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'ling-3.0-flash-free',
+        label: 'Ling-3.0-flash Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'longcat-2.0-free',
+        label: 'LongCat-2.0 Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'mimo-v2.5-free',
+        label: 'MiMo-V2.5 Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'minimax-m2.5',
+        label: 'MiniMax M2.5',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.3,
+          cachedInputPerMillion: 0.06,
+          outputPerMillion: 1.2,
+        },
+      },
+      {
+        id: 'minimax-m2.7',
+        label: 'MiniMax M2.7',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.3,
+          cachedInputPerMillion: 0.06,
+          outputPerMillion: 1.2,
+        },
+      },
+      {
+        id: 'minimax-m3',
+        label: 'MiniMax M3',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.3,
+          cachedInputPerMillion: 0.06,
+          outputPerMillion: 1.2,
+        },
+      },
+      {
+        id: 'nemotron-3-ultra-free',
+        label: 'Nemotron 3 Ultra Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+      {
+        id: 'north-mini-code-free',
+        label: 'North Mini Code Free',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.0,
+          cachedInputPerMillion: 0.0,
+          outputPerMillion: 0.0,
+        },
+      },
+    ],
+  },
+  'opencode-go': {
+    id: 'opencode-go',
+    label: 'OpenCode Go',
+    baseURL: 'https://opencode.ai/zen/go/v1',
+    apiKeyEnv: 'OPENCODE_API_KEY',
+    requiresApiKey: true,
+    verifiedAt: '2026-08-07',
+    models: [
+      {
+        id: 'deepseek-v4-flash',
+        label: 'DeepSeek V4 Flash',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.14,
+          cachedInputPerMillion: 0.0028,
+          outputPerMillion: 0.28,
+        },
+      },
+      {
+        id: 'deepseek-v4-pro',
+        label: 'DeepSeek V4 Pro',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.435,
+          cachedInputPerMillion: 0.003625,
+          outputPerMillion: 0.87,
+        },
+      },
+      {
+        id: 'glm-5.1',
+        label: 'GLM-5.1',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 1.4,
+          cachedInputPerMillion: 0.26,
+          outputPerMillion: 4.4,
+        },
+      },
+      {
+        id: 'glm-5.2',
+        label: 'GLM-5.2',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 1.4,
+          cachedInputPerMillion: 0.26,
+          outputPerMillion: 4.4,
+        },
+      },
+      {
+        id: 'grok-4.5',
+        label: 'Grok 4.5',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 2.0,
+          cachedInputPerMillion: 0.3,
+          outputPerMillion: 6.0,
+        },
+      },
+      {
+        id: 'hy3',
+        label: 'Hy3',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.14,
+          cachedInputPerMillion: 0.035,
+          outputPerMillion: 0.58,
+        },
+      },
+      {
+        id: 'kimi-k2.6',
+        label: 'Kimi K2.6',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.95,
+          cachedInputPerMillion: 0.16,
+          outputPerMillion: 4.0,
+        },
+      },
+      {
+        id: 'kimi-k2.7-code',
+        label: 'Kimi K2.7 Code',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 0.95,
+          cachedInputPerMillion: 0.19,
+          outputPerMillion: 4.0,
+        },
+      },
+      {
+        id: 'kimi-k3',
+        label: 'Kimi K3',
+        ctx: 1_048_576,
+        reasoning: true,
+        pricing: {
+          inputPerMillion: 3.0,
+          cachedInputPerMillion: 0.3,
+          outputPerMillion: 15.0,
+        },
+      },
+      {
+        id: 'mimo-v2.5',
+        label: 'MiMo-V2.5',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: unknownPricing,
+      },
+      {
+        id: 'mimo-v2.5-pro',
+        label: 'MiMo-V2.5-Pro',
+        ctx: 131_072,
+        reasoning: true,
+        pricing: unknownPricing,
+      },
+    ],
+  },
 } as const satisfies Record<ProviderId, ProviderConfig>;
 
 const STALE_AFTER_DAYS = 90;

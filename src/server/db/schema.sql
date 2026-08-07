@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS conversations (
   effort TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
+  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+  science_level TEXT,
+  science_format TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -68,7 +70,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   slug TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('markdown', 'code', 'svg', 'mermaid')),
+  kind TEXT NOT NULL CHECK (kind IN ('markdown', 'code', 'svg', 'mermaid', 'mindmap', 'chart')),
   language TEXT,
   title TEXT NOT NULL,
   current_version INTEGER NOT NULL DEFAULT 0,
@@ -127,3 +129,50 @@ CREATE TABLE IF NOT EXISTS provider_settings (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, id)
 );
+
+-- Configuração de busca na web, uma linha por usuário. Tabela própria, e não
+-- uma linha reservada em provider_settings, para que o buscador nunca entre no
+-- caminho de resolveProvider nem no catálogo de modelos (ver migração 005).
+CREATE TABLE IF NOT EXISTS search_settings (
+  user_id TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  base_url TEXT,
+  api_key_cipher TEXT,
+  max_results INTEGER NOT NULL DEFAULT 5,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('image', 'document', 'spreadsheet')),
+  filename TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  -- Base64 dos bytes originais; preenchido só em imagem.
+  data_base64 TEXT,
+  -- Texto para o prompt; preenchido só em documento.
+  extracted_text TEXT,
+  truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+  created_at INTEGER NOT NULL
+);
+
+-- Consulta quente: os anexos de uma mensagem ao montar a conversa.
+CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
+-- Varredura de órfãos: por dono e idade, sem mensagem.
+CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS spreadsheet_versions (
+  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  workbook_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (attachment_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_spreadsheet_versions_attachment
+  ON spreadsheet_versions(attachment_id, version DESC);

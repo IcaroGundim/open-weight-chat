@@ -22,6 +22,17 @@ import {
   type Usage,
 } from '../../shared/types';
 import { parseEffortColumn } from '../effort';
+import { ScienceFormatSchema, ScienceLevelSchema } from '../../shared/types';
+
+/** NULL, valor desconhecido ou coluna ausente caem no estado desligado. */
+function parseScienceLevel(valor: unknown) {
+  const lido = ScienceLevelSchema.safeParse(valor);
+  return lido.success ? lido.data : 'off';
+}
+function parseScienceFormat(valor: unknown) {
+  const lido = ScienceFormatSchema.safeParse(valor);
+  return lido.success ? lido.data : undefined;
+}
 
 const FALLBACK_SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -41,7 +52,9 @@ CREATE TABLE IF NOT EXISTS conversations (
   effort TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
+  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+  science_level TEXT,
+  science_format TEXT
 );
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
@@ -81,7 +94,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   slug TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('markdown', 'code', 'svg', 'mermaid')),
+  kind TEXT NOT NULL CHECK (kind IN ('markdown', 'code', 'svg', 'mermaid', 'mindmap', 'chart')),
   language TEXT,
   title TEXT NOT NULL,
   current_version INTEGER NOT NULL DEFAULT 0,
@@ -125,6 +138,46 @@ CREATE TABLE IF NOT EXISTS provider_settings (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, id)
 );
+CREATE TABLE IF NOT EXISTS search_settings (
+  user_id TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  base_url TEXT,
+  api_key_cipher TEXT,
+  max_results INTEGER NOT NULL DEFAULT 5,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id)
+);
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('image', 'document', 'spreadsheet')),
+  filename TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  -- Base64 dos bytes originais; preenchido só em imagem.
+  data_base64 TEXT,
+  -- Texto para o prompt; preenchido só em documento.
+  extracted_text TEXT,
+  truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+  created_at INTEGER NOT NULL
+);
+
+-- Consulta quente: os anexos de uma mensagem ao montar a conversa.
+CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
+-- Varredura de órfãos: por dono e idade, sem mensagem.
+CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_id, created_at);
+CREATE TABLE IF NOT EXISTS spreadsheet_versions (
+  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  workbook_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (attachment_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_spreadsheet_versions_attachment ON spreadsheet_versions(attachment_id, version DESC);
 `;
 
 export interface ProviderSettingsRecord {
@@ -149,6 +202,84 @@ export interface UpsertProviderSettingsData {
   apiKeyCipher?: string | null;
 }
 
+/**
+ * Configuração de busca do usuário. `apiKeyCipher` sempre cifrado, como em
+ * `ProviderSettingsRecord` — a chave em claro nunca sai desta camada.
+ */
+export interface SearchSettingsRecord {
+  backend: string;
+  baseURL: string | null;
+  apiKeyCipher: string | null;
+  maxResults: number;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertSearchSettingsData {
+  backend: string;
+  baseURL?: string | null;
+  /** undefined mantém a chave atual; null apaga; string grava a nova. */
+  apiKeyCipher?: string | null;
+  maxResults?: number;
+  enabled?: boolean;
+}
+
+/**
+ * Anexo guardado. `dataBase64` só em imagem; `extractedText` só em documento —
+ * ver a migração 006 para o porquê de guardar um e não o outro.
+ */
+export interface AttachmentRecord {
+  id: string;
+  userId: string;
+  conversationId: string | null;
+  messageId: string | null;
+  kind: 'image' | 'document' | 'spreadsheet';
+  filename: string;
+  mime: string;
+  sizeBytes: number;
+  dataBase64: string | null;
+  extractedText: string | null;
+  truncated: boolean;
+  createdAt: number;
+}
+
+export interface CreateAttachmentData {
+  id?: string;
+  kind: 'image' | 'document' | 'spreadsheet';
+  filename: string;
+  mime: string;
+  sizeBytes: number;
+  dataBase64: string | null;
+  extractedText: string | null;
+  truncated: boolean;
+}
+
+function attachmentFromRow(row: Record<string, unknown>): AttachmentRecord {
+  const rawKind = asString(row.kind);
+  return {
+    id: asString(row.id),
+    userId: asString(row.user_id),
+    conversationId: row.conversation_id == null ? null : asString(row.conversation_id),
+    messageId: row.message_id == null ? null : asString(row.message_id),
+    kind: rawKind === 'image' ? 'image' : rawKind === 'spreadsheet' ? 'spreadsheet' : 'document',
+    filename: asString(row.filename),
+    mime: asString(row.mime),
+    sizeBytes: Number(row.size_bytes),
+    dataBase64: row.data_base64 == null ? null : asString(row.data_base64),
+    extractedText: row.extracted_text == null ? null : asString(row.extracted_text),
+    truncated: Number(row.truncated) === 1,
+    createdAt: Number(row.created_at),
+  };
+}
+
+export interface SpreadsheetVersionRecord {
+  attachmentId: string;
+  version: number;
+  workbookJson: string;
+  createdAt: number;
+}
+
 export interface CreateConversationData {
   id?: string;
   title?: string | null;
@@ -156,6 +287,8 @@ export interface CreateConversationData {
   modelId: string;
   systemPrompt?: string | null;
   effort?: EffortLevel;
+  scienceLevel?: 'off' | 'basic' | 'intermediate' | 'advanced';
+  scienceFormat?: 'markdown' | 'latex';
   createdAt?: number;
 }
 
@@ -165,6 +298,8 @@ export interface UpdateConversationData {
   modelId?: string;
   systemPrompt?: string | null;
   effort?: EffortLevel;
+  scienceLevel?: 'off' | 'basic' | 'intermediate' | 'advanced';
+  scienceFormat?: 'markdown' | 'latex';
   archived?: boolean;
 }
 
@@ -342,6 +477,8 @@ function rowToSummary(input: Record<string, unknown>): ConversationSummary {
     modelId: asString(row.model_id),
     systemPrompt: asNullableString(row.system_prompt),
     effort: parseEffortColumn(row.effort),
+    scienceLevel: parseScienceLevel(row.science_level),
+    scienceFormat: parseScienceFormat(row.science_format),
     createdAt: asNumber(row.created_at),
     updatedAt: asNumber(row.updated_at),
     archived: asBoolean(row.archived),
@@ -401,6 +538,8 @@ export class ChatDatabase {
     // Bancos criados antes do nível de esforço: NULL lê como `auto`, então a
     // conversa antiga segue sem enviar parâmetro de raciocínio nenhum.
     this.ensureColumn('conversations', 'effort', 'TEXT');
+    this.ensureColumn('conversations', 'science_level', 'TEXT');
+    this.ensureColumn('conversations', 'science_format', 'TEXT');
     this.db.exec(loadSchemaSql());
     // Keep external-content FTS consistent with databases created before the triggers existed.
     this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');");
@@ -435,8 +574,8 @@ export class ChatDatabase {
     this.db
       .prepare(
         `INSERT INTO conversations
-          (id, user_id, title, provider_id, model_id, system_prompt, effort, created_at, updated_at, archived)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          (id, user_id, title, provider_id, model_id, system_prompt, effort, science_level, science_format, created_at, updated_at, archived)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         id,
@@ -446,6 +585,8 @@ export class ChatDatabase {
         data.modelId,
         data.systemPrompt ?? null,
         data.effort ?? 'auto',
+        data.scienceLevel ?? 'off',
+        data.scienceFormat ?? null,
         now,
         now,
       );
@@ -456,7 +597,7 @@ export class ChatDatabase {
     const includeArchived = options.includeArchived ?? false;
     const rows = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.science_level, c.science_format,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
@@ -473,7 +614,7 @@ export class ChatDatabase {
   getConversation(userId: string, id: string): Conversation | null {
     const summaryRow = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.science_level, c.science_format,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
@@ -499,14 +640,16 @@ export class ChatDatabase {
     const modelId = data.modelId ?? current.modelId;
     const systemPrompt = data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt;
     const effort = data.effort ?? current.effort;
+    const scienceLevel = data.scienceLevel ?? current.scienceLevel ?? 'off';
+    const scienceFormat = data.scienceFormat ?? current.scienceFormat ?? null;
     const archived = data.archived === undefined ? current.archived : data.archived;
     this.db
       .prepare(
         `UPDATE conversations
-            SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, effort = ?, archived = ?, updated_at = ?
+            SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, effort = ?, science_level = ?, science_format = ?, archived = ?, updated_at = ?
           WHERE id = ? AND user_id = ?`,
       )
-      .run(title, providerId, modelId, systemPrompt, effort, archived ? 1 : 0, Date.now(), id, userId);
+      .run(title, providerId, modelId, systemPrompt, effort, scienceLevel, scienceFormat, archived ? 1 : 0, Date.now(), id, userId);
     return this.getConversation(userId, id);
   }
 
@@ -760,6 +903,109 @@ export class ChatDatabase {
     return asNumber(result.changes) > 0;
   }
 
+  // --- Anexos -------------------------------------------------------------
+
+  createAttachment(userId: string, data: CreateAttachmentData): AttachmentRecord {
+    const record: AttachmentRecord = {
+      id: data.id ?? randomUUID(),
+      userId,
+      conversationId: null,
+      messageId: null,
+      kind: data.kind,
+      filename: data.filename,
+      mime: data.mime,
+      sizeBytes: data.sizeBytes,
+      dataBase64: data.dataBase64,
+      extractedText: data.extractedText,
+      truncated: data.truncated,
+      createdAt: Date.now(),
+    };
+    this.db.prepare(
+      `INSERT INTO attachments (id, user_id, conversation_id, message_id, kind, filename, mime, size_bytes, data_base64, extracted_text, truncated, created_at)
+       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(record.id, userId, record.kind, record.filename, record.mime, record.sizeBytes,
+      record.dataBase64, record.extractedText, record.truncated ? 1 : 0, record.createdAt);
+    return record;
+  }
+
+  /** Sempre por dono: anexo de outro usuário não existe para quem pergunta. */
+  getAttachment(userId: string, id: string): AttachmentRecord | null {
+    const row = this.db.prepare('SELECT * FROM attachments WHERE user_id = ? AND id = ?').get(userId, id) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? attachmentFromRow(row) : null;
+  }
+
+  getAttachments(userId: string, ids: readonly string[]): AttachmentRecord[] {
+    if (ids.length === 0) return [];
+    const marcadores = ids.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(`SELECT * FROM attachments WHERE user_id = ? AND id IN (${marcadores}) ORDER BY created_at ASC`)
+      .all(userId, ...ids) as Record<string, unknown>[];
+    return rows.map(attachmentFromRow);
+  }
+
+  /** Liga os anexos à mensagem no momento do envio. */
+  attachToMessage(userId: string, ids: readonly string[], conversationId: string, messageId: string): void {
+    if (ids.length === 0) return;
+    const marcadores = ids.map(() => '?').join(', ');
+    this.db.prepare(
+      `UPDATE attachments SET conversation_id = ?, message_id = ?
+       WHERE user_id = ? AND id IN (${marcadores}) AND message_id IS NULL`,
+    ).run(conversationId, messageId, userId, ...ids);
+  }
+
+  listAttachmentsForConversation(userId: string, conversationId: string): AttachmentRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM attachments WHERE user_id = ? AND conversation_id = ? ORDER BY created_at ASC')
+      .all(userId, conversationId) as Record<string, unknown>[];
+    return rows.map(attachmentFromRow);
+  }
+
+  deleteAttachment(userId: string, id: string): boolean {
+    // Só o que ainda não foi enviado: apagar um anexo já usado deixaria a
+    // mensagem falando de um arquivo que não existe mais.
+    return this.db.prepare('DELETE FROM attachments WHERE user_id = ? AND id = ? AND message_id IS NULL')
+      .run(userId, id).changes > 0;
+  }
+
+  /** Anexos que subiram e nunca foram enviados ocupam espaço para sempre. */
+  deleteOrphanAttachments(userId: string, olderThanMs: number): number {
+    // `changes` do node:sqlite pode vir como bigint; o chamador só conta.
+    return Number(
+      this.db.prepare('DELETE FROM attachments WHERE user_id = ? AND message_id IS NULL AND created_at < ?')
+        .run(userId, Date.now() - olderThanMs).changes,
+    );
+  }
+
+  getSpreadsheetVersion(userId: string, attachmentId: string, version?: number): SpreadsheetVersionRecord | null {
+    const row = this.db.prepare(
+      `SELECT sv.* FROM spreadsheet_versions sv
+       JOIN attachments a ON a.id = sv.attachment_id AND a.user_id = ? AND a.kind = 'spreadsheet'
+       WHERE sv.attachment_id = ? ${version === undefined ? '' : 'AND sv.version = ?'}
+       ORDER BY sv.version DESC LIMIT 1`,
+    ).get(...(version === undefined ? [userId, attachmentId] : [userId, attachmentId, version])) as Record<string, unknown> | undefined;
+    return row ? {
+      attachmentId: asString(row.attachment_id),
+      version: asNumber(row.version),
+      workbookJson: asString(row.workbook_json),
+      createdAt: asNumber(row.created_at),
+    } : null;
+  }
+
+  insertSpreadsheetVersion(userId: string, attachmentId: string, workbookJson: string, baseVersion?: number): SpreadsheetVersionRecord | null {
+    const expected = baseVersion ?? 0;
+    const next = expected + 1;
+    const createdAt = Date.now();
+    const result = this.db.prepare(
+      `INSERT INTO spreadsheet_versions (attachment_id, version, workbook_json, created_at)
+       SELECT id, ?, ?, ? FROM attachments
+       WHERE id = ? AND user_id = ? AND kind = 'spreadsheet'
+         AND COALESCE((SELECT MAX(version) FROM spreadsheet_versions WHERE attachment_id = ?), 0) = ?`,
+    ).run(next, workbookJson, createdAt, attachmentId, userId, attachmentId, expected);
+    return Number(result.changes) > 0 ? { attachmentId, version: next, workbookJson, createdAt } : null;
+  }
+
   listProviderSettings(userId: string): ProviderSettingsRecord[] {
     return this.db
       .prepare('SELECT * FROM provider_settings WHERE user_id = ? ORDER BY label ASC, id ASC')
@@ -826,11 +1072,67 @@ export class ChatDatabase {
     return this.db.prepare('DELETE FROM provider_settings WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
   }
 
+  getSearchSettings(userId: string): SearchSettingsRecord | null {
+    const row = this.db.prepare('SELECT * FROM search_settings WHERE user_id = ?').get(userId) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    return {
+      backend: asString(row.backend),
+      baseURL: row.base_url === null || row.base_url === undefined ? null : asString(row.base_url),
+      apiKeyCipher: row.api_key_cipher === null || row.api_key_cipher === undefined ? null : asString(row.api_key_cipher),
+      maxResults: Number(row.max_results),
+      enabled: Number(row.enabled) === 1,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  upsertSearchSettings(userId: string, data: UpsertSearchSettingsData): SearchSettingsRecord {
+    const existing = this.getSearchSettings(userId);
+    const now = Date.now();
+    // `apiKeyCipher: undefined` preserva a chave gravada — é o que permite ao
+    // usuário trocar de buscador ou mexer no limite sem redigitar a chave.
+    const cipher = data.apiKeyCipher === undefined ? existing?.apiKeyCipher ?? null : data.apiKeyCipher;
+    const record: SearchSettingsRecord = {
+      backend: data.backend,
+      baseURL: data.baseURL === undefined ? existing?.baseURL ?? null : data.baseURL,
+      apiKeyCipher: cipher,
+      maxResults: data.maxResults ?? existing?.maxResults ?? 5,
+      enabled: data.enabled ?? existing?.enabled ?? true,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO search_settings (user_id, backend, base_url, api_key_cipher, max_results, enabled, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           backend = excluded.backend, base_url = excluded.base_url, api_key_cipher = excluded.api_key_cipher,
+           max_results = excluded.max_results, enabled = excluded.enabled, updated_at = excluded.updated_at`,
+      )
+      .run(
+        userId,
+        record.backend,
+        record.baseURL,
+        record.apiKeyCipher,
+        record.maxResults,
+        record.enabled ? 1 : 0,
+        record.createdAt,
+        record.updatedAt,
+      );
+    return record;
+  }
+
+  deleteSearchSettings(userId: string): boolean {
+    return this.db.prepare('DELETE FROM search_settings WHERE user_id = ?').run(userId).changes > 0;
+  }
+
   searchConversations(userId: string, query: string): ConversationSummary[] {
     const ftsQuery = escapeFtsQuery(query);
     const rows = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.science_level, c.science_format,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd

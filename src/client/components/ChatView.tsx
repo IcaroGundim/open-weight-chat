@@ -14,6 +14,7 @@ import { MessageBubble } from './MessageBubble';
 import { ModelCard } from './ModelCard';
 import { ModelPicker } from './ModelPicker';
 import { SettingsPanel } from './SettingsPanel';
+import { SpreadsheetPanel } from './SpreadsheetPanel';
 
 const suggestions = [
   'Compare dois modelos pelo custo real de uma tarefa longa.',
@@ -74,10 +75,14 @@ export function ChatView() {
   const setSelectedModel = useChatStore((state) => state.setSelectedModel);
   const setEffort = useChatStore((state) => state.setEffort);
   const pendingEffort = useChatStore((state) => state.pendingEffort);
+  const pendingScience = useChatStore((state) => state.pendingScience);
+  const setScience = useChatStore((state) => state.setScience);
   const defaultEffort = useSettingsStore((state) => state.defaultEffort);
   const clearError = useChatStore((state) => state.clearError);
   const openArtifactSelection = useChatStore((state) => state.openArtifactSelection);
   const closeArtifact = useChatStore((state) => state.closeArtifact);
+  const openSpreadsheetId = useChatStore((state) => state.openSpreadsheetId);
+  const closeSpreadsheet = useChatStore((state) => state.closeSpreadsheet);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const messages = activeConversationId ? messagesByConversation[activeConversationId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
@@ -85,6 +90,10 @@ export function ChatView() {
   // Conversa aberta manda; sem conversa ainda, mostra o que a próxima vai
   // nascer usando — a escolha pendente, ou o padrão das Configurações.
   const activeEffort = activeConversation?.effort ?? pendingEffort ?? defaultEffort;
+  // Mesma regra do esforço: a escolha pendente vale enquanto não há conversa;
+  // depois, quem manda é a conversa aberta.
+  const scienceLevel = pendingScience?.level ?? activeConversation?.scienceLevel ?? 'off';
+  const scienceFormat = pendingScience?.format ?? activeConversation?.scienceFormat ?? 'markdown';
   const totalCost = useMemo(
     () => activeConversation?.totalCostUsd ?? messages.reduce((sum, message) => sum + (message.costUsd ?? message.usage?.costUsd ?? 0), 0),
     [activeConversation?.totalCostUsd, messages],
@@ -112,9 +121,9 @@ export function ChatView() {
   }, [loadConversations, loadModels]);
 
   useEffect(() => {
-    if (!openArtifactSelection || typeof window === 'undefined') return;
+    if ((!openArtifactSelection && !openSpreadsheetId) || typeof window === 'undefined') return;
     if (window.innerWidth >= 900 && window.innerWidth < 1280) setSidebarOpen(false);
-  }, [openArtifactSelection]);
+  }, [openArtifactSelection, openSpreadsheetId]);
 
   useEffect(() => {
     if (!bottomRef.current) return;
@@ -126,12 +135,13 @@ export function ChatView() {
       if (event.key !== 'Escape') return;
       if (costOverviewOpen) setCostOverviewOpen(false);
       else if (settingsOpen) setSettingsOpen(false);
+      else if (openSpreadsheetId) closeSpreadsheet();
       else if (openArtifactSelection) closeArtifact();
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closeArtifact, costOverviewOpen, openArtifactSelection, settingsOpen, sidebarOpen]);
+  }, [closeArtifact, closeSpreadsheet, costOverviewOpen, openArtifactSelection, openSpreadsheetId, settingsOpen, sidebarOpen]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -148,7 +158,7 @@ export function ChatView() {
   const canSend = !isLoadingModels && models.length > 0;
 
   return (
-    <div className={'chat-app' + (sidebarOpen ? '' : ' sidebar-collapsed') + (openArtifactSelection && activeConversationId ? ' artifact-panel-open' : '')}>
+    <div className={'chat-app' + (sidebarOpen ? '' : ' sidebar-collapsed') + ((openArtifactSelection && activeConversationId) || openSpreadsheetId ? ' artifact-panel-open' : '')}>
       <ConversationSidebar open={sidebarOpen} onOpen={openSidebar} onClose={closeSidebar} onOpenSettings={openSettings} />
       <main className="chat-main">
         <header className="chat-header">
@@ -249,6 +259,9 @@ export function ChatView() {
             disabled={!canSend}
             effort={activeEffort}
             onEffortChange={setEffort}
+            scienceLevel={scienceLevel}
+            scienceFormat={scienceFormat}
+            onScienceChange={setScience}
           />
           <p className="privacy-note">As chaves ficam no servidor e o Markdown é renderizado sem HTML cru.</p>
         </div>
@@ -263,6 +276,7 @@ export function ChatView() {
         />
       ) : null}
       {openArtifactSelection && activeConversationId ? <ArtifactPanel conversationId={activeConversationId} onClose={closeArtifact} /> : null}
+      {openSpreadsheetId ? <SpreadsheetPanel attachmentId={openSpreadsheetId} /> : null}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import {
   createConversation as createConversationRequest,
   deleteConversation as deleteConversationRequest,
   getArtifactVersion,
+  saveArtifactContent,
   getArtifacts,
   getConversation,
   getConversations,
@@ -15,6 +16,9 @@ import {
 import { getUserId } from '../token-provider';
 import { useSettingsStore } from './settings';
 import type {
+  Attachment,
+  ScienceFormat,
+  ScienceLevel,
   Artifact,
   ArtifactEndEnvelope,
   ArtifactStartEnvelope,
@@ -22,6 +26,7 @@ import type {
   Conversation,
   EffortLevel,
   ModelOption,
+  SpreadsheetSelection,
   StreamErrorEnvelope,
   Usage,
 } from '../types';
@@ -129,6 +134,8 @@ interface ChatState {
   artifactsByConversation: Record<string, Artifact[]>;
   streamingArtifacts: Record<string, string>;
   openArtifactSelection: { slug: string; version: number } | null;
+  openSpreadsheetId: string | null;
+  pendingSpreadsheetSelection: SpreadsheetSelection | null;
   isLoadingModels: boolean;
   isLoadingConversations: boolean;
   loadingConversationId: string | null;
@@ -154,12 +161,18 @@ interface ChatState {
   deleteConversation: (id: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
   setEffort: (effort: EffortLevel) => Promise<void>;
+  setScience: (level: ScienceLevel, format?: ScienceFormat) => void;
+  pendingScience: { level: ScienceLevel; format: ScienceFormat } | null;
   loadArtifacts: (conversationId: string) => Promise<void>;
   openArtifact: (selection: { slug: string; version: number }) => void;
   closeArtifact: () => void;
+  openSpreadsheet: (id: string) => void;
+  closeSpreadsheet: () => void;
+  useSpreadsheetSelection: (selection: SpreadsheetSelection | null) => void;
   selectArtifactVersion: (slug: string, version: number) => Promise<void>;
+  saveArtifact: (slug: string, content: string) => Promise<void>;
   promoteCodeArtifact: (messageId: string, code: string, language?: string) => void;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, attachments?: Attachment[]) => Promise<void>;
   stopStreaming: () => void;
   clearError: () => void;
   resetState: () => void;
@@ -175,6 +188,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   artifactsByConversation: {},
   streamingArtifacts: {},
   openArtifactSelection: null,
+  openSpreadsheetId: null,
+  pendingSpreadsheetSelection: null,
   isLoadingModels: false,
   isLoadingConversations: false,
   loadingConversationId: null,
@@ -184,6 +199,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamController: null,
   streamAbortRequested: false,
   pendingEffort: null,
+  pendingScience: null,
   error: null,
 
   loadModels: async () => {
@@ -228,7 +244,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const activeConversationId = active && conversations.some((conversation) => conversation.id === active)
           ? active
           : null;
-        return { conversations, activeConversationId, isLoadingConversations: false };
+        return {
+          conversations,
+          activeConversationId,
+          isLoadingConversations: false,
+          ...(active && !activeConversationId ? {
+            openArtifactSelection: null,
+            openSpreadsheetId: null,
+            pendingSpreadsheetSelection: null,
+          } : {}),
+        };
       });
     } catch (error) {
       if (!isCurrentSession(epoch)) return;
@@ -265,10 +290,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectConversation: async (id) => {
     const epoch = sessionEpoch;
     if (!id) {
-      set({ activeConversationId: null, error: null });
+      set({ activeConversationId: null, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, error: null });
       return;
     }
-    set({ activeConversationId: id, error: null });
+    set({ activeConversationId: id, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, error: null });
     if (get().messagesLoaded[id]) return;
 
     set({ loadingConversationId: id });
@@ -290,7 +315,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, pendingEffort: null, error: null }),
+  newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, pendingEffort: null, error: null }),
 
   createConversation: async (title = 'Nova conversa') => {
     const epoch = sessionEpoch;
@@ -306,6 +331,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => ({
         conversations: [conversation, ...state.conversations.filter((item) => item.id !== conversation.id)],
         activeConversationId: conversation.id,
+        openArtifactSelection: null,
+        openSpreadsheetId: null,
+        pendingSpreadsheetSelection: null,
         messagesByConversation: { ...state.messagesByConversation, [conversation.id]: [] },
         messagesLoaded: { ...state.messagesLoaded, [conversation.id]: true },
         pendingEffort: null,
@@ -355,6 +383,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           artifactsByConversation,
           activeConversationId: state.activeConversationId === id ? null : state.activeConversationId,
           openArtifactSelection: state.activeConversationId === id ? null : state.openArtifactSelection,
+          openSpreadsheetId: state.activeConversationId === id ? null : state.openSpreadsheetId,
+          pendingSpreadsheetSelection: state.activeConversationId === id ? null : state.pendingSpreadsheetSelection,
           error: null,
         };
       });
@@ -369,6 +399,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       window.localStorage.setItem(selectedModelStorageKey(), id);
     }
     set({ selectedModelId: id });
+  },
+
+  /**
+   * Escolha do modo Science antes do envio.
+   *
+   * Fica pendente no cliente e só é gravada na conversa quando a mensagem sai
+   * — do mesmo jeito que o esforço. Gravar antes criaria conversa vazia só
+   * porque alguém mexeu no seletor.
+   */
+  setScience: (level, format) => {
+    set((state) => ({
+      pendingScience: {
+        level,
+        format: format ?? state.pendingScience?.format
+          ?? state.conversations.find((c) => c.id === state.activeConversationId)?.scienceFormat
+          ?? 'markdown',
+      },
+    }));
   },
 
   setEffort: async (effort) => {
@@ -399,9 +447,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  openArtifact: (selection) => set({ openArtifactSelection: selection }),
+  openArtifact: (selection) => set({ openArtifactSelection: selection, openSpreadsheetId: null }),
 
   closeArtifact: () => set({ openArtifactSelection: null }),
+
+  openSpreadsheet: (id) => set({ openSpreadsheetId: id, openArtifactSelection: null }),
+
+  closeSpreadsheet: () => set({ openSpreadsheetId: null }),
+
+  useSpreadsheetSelection: (selection) => set({ pendingSpreadsheetSelection: selection }),
+
+  saveArtifact: async (slug, content) => {
+    const conversationId = get().activeConversationId;
+    if (!conversationId) return;
+    const versao = await saveArtifactContent(conversationId, slug, content);
+    // Recarrega e já aponta para a versão nova: deixar o painel na anterior
+    // faria a edição parecer não ter sido gravada.
+    await get().loadArtifacts(conversationId);
+    if (versao) get().openArtifact({ slug, version: versao.version });
+  },
 
   selectArtifactVersion: async (slug, version) => {
     const epoch = sessionEpoch;
@@ -480,10 +544,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  sendMessage: async (content) => {
+  sendMessage: async (content, attachments = []) => {
     const epoch = sessionEpoch;
     const trimmed = content.trim();
-    if (!trimmed || get().isStreaming) return;
+    const spreadsheetSelection = get().pendingSpreadsheetSelection;
+    // Anexo sozinho já é uma mensagem: mandar um PDF e pedir "resume" na
+    // mensagem seguinte é uso normal, e exigir texto aqui obrigaria o usuário
+    // a escrever algo só para destravar o botão.
+    if ((!trimmed && attachments.length === 0) || get().isStreaming) return;
 
     const selected = get().models.find((model) => model.id === get().selectedModelId);
     if (!selected) {
@@ -497,7 +565,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     let conversationId = get().activeConversationId;
     if (!conversationId || !get().conversations.some((conversation) => conversation.id === conversationId)) {
-      const created = await get().createConversation(trimmed.slice(0, 56));
+      const created = await get().createConversation((trimmed || attachments[0]?.filename || 'Nova conversa').slice(0, 56));
       if (!created || !isCurrentSession(epoch)) return;
       conversationId = created.id;
     }
@@ -507,6 +575,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversationId,
       role: 'user',
       content: trimmed,
+      attachments: attachments.length > 0 ? attachments : undefined,
       status: 'complete',
       createdAt: Date.now(),
     };
@@ -540,6 +609,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamController: controller,
       streamAbortRequested: false,
       error: null,
+      pendingSpreadsheetSelection: null,
     }));
 
     const updateAssistant = (update: (message: ChatMessage) => ChatMessage) => {
@@ -564,10 +634,76 @@ export const useChatStore = create<ChatState>((set, get) => ({
           providerId: selected.providerId,
           modelId: selected.id,
           effort: get().conversations.find((conversation) => conversation.id === conversationId)?.effort ?? 'auto',
+          ...(attachments.length > 0 ? { attachmentIds: attachments.map((anexo) => anexo.id) } : {}),
+          ...(spreadsheetSelection ? {
+            spreadsheetSelection: {
+              attachmentId: spreadsheetSelection.attachmentId,
+              version: spreadsheetSelection.version,
+              sheet: spreadsheetSelection.sheet,
+              startRow: spreadsheetSelection.startRow,
+              startColumn: spreadsheetSelection.startColumn,
+              endRow: spreadsheetSelection.endRow,
+              endColumn: spreadsheetSelection.endColumn,
+            },
+          } : {}),
+          ...(get().pendingScience ? {
+            scienceLevel: get().pendingScience!.level,
+            scienceFormat: get().pendingScience!.format,
+          } : {}),
         },
         {
-          onText: (text) => updateAssistant((message) => ({ ...message, content: message.content + text })),
+          onTrace: (evento) => updateAssistant((message) => ({
+            ...message,
+            trace: [...(message.trace ?? []), evento],
+          })),
+          onScienceDelta: (delta) => updateAssistant((message) => ({
+            ...message,
+            // Troca de agente zera o rascunho: o bastidor mostra o que está
+            // sendo escrito AGORA, não a colagem de tudo que já passou.
+            scienceDraft: message.scienceDraft?.index === delta.index
+              ? {
+                ...message.scienceDraft,
+                text: message.scienceDraft.text + delta.text,
+                reasoning: message.scienceDraft.reasoning + delta.reasoning,
+              }
+              : { role: delta.role, index: delta.index, text: delta.text, reasoning: delta.reasoning },
+          })),
+          onScienceStage: (stage) => updateAssistant((message) => {
+            // Substitui o estágio de mesmo índice em vez de acumular: cada um
+            // manda "start" e depois "done", e o que interessa é o estado
+            // corrente de cada passo, não o histórico dos avisos.
+            const anteriores = (message.scienceStages ?? []).filter((s) => s.index !== stage.index);
+            return { ...message, scienceStages: [...anteriores, stage].sort((a, b) => a.index - b.index) };
+          }),
+          onText: (text) => updateAssistant((message) => ({
+            ...message,
+            // A resposta final começou: o bastidor sai de cena.
+            scienceDraft: undefined,
+            content: message.content + text,
+          })),
           onReasoning: (reasoning) => updateAssistant((message) => ({ ...message, reasoning: `${message.reasoning ?? ''}${reasoning}` })),
+          // A busca fica GUARDADA NA MENSAGEM, não num estado à parte: sem as
+          // fontes, quem lê a resposta depois não tem como conferir de onde
+          // veio o que está lendo. Elas são parte do que aquela resposta é.
+          onSearchStart: ({ query, round }) => {
+            if (!isCurrentSession(epoch)) return;
+            updateAssistant((message) => ({
+              ...message,
+              searches: [...(message.searches ?? []), { query, round, results: [], done: false }],
+            }));
+          },
+          onSearchEnd: ({ query, round, results, failure }) => {
+            if (!isCurrentSession(epoch)) return;
+            updateAssistant((message) => {
+              const buscas = message.searches ?? [];
+              const indice = buscas.findIndex((busca) => busca.round === round && !busca.done);
+              const concluida = { query, round, results, failure: failure ?? null, done: true };
+              // Se o `search_start` se perdeu (reconexão, por exemplo), o
+              // `search_end` ainda registra a busca em vez de sumir com ela.
+              if (indice < 0) return { ...message, searches: [...buscas, concluida] };
+              return { ...message, searches: buscas.map((busca, i) => (i === indice ? concluida : busca)) };
+            });
+          },
           onArtifactStart: (artifact: ArtifactStartEnvelope) => {
             if (!isCurrentSession(epoch)) return;
             const now = Date.now();
@@ -659,6 +795,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }).catch(() => {
               // A versão otimista já foi exibida; falhas de reconciliação não interrompem o chat.
             });
+          },
+          onSpreadsheetReady: ({ attachment }) => {
+            if (!isCurrentSession(epoch)) return;
+            updateAssistant((message) => ({
+              ...message,
+              attachments: [...(message.attachments ?? []).filter((item) => item.id !== attachment.id), attachment],
+            }));
+            set({ openSpreadsheetId: attachment.id, openArtifactSelection: null });
           },
           onUsage: (usage) => updateAssistant((message) => ({
             ...message,
@@ -778,6 +922,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       artifactsByConversation: {},
       streamingArtifacts: {},
       openArtifactSelection: null,
+      openSpreadsheetId: null,
+      pendingSpreadsheetSelection: null,
       isLoadingModels: false,
       isLoadingConversations: false,
       loadingConversationId: null,

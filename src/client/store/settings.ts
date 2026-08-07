@@ -6,6 +6,24 @@ const THEME_STORAGE_KEY = 'open-weight-chat.theme';
 const DENSITY_STORAGE_KEY = 'open-weight-chat.density';
 const MOTION_STORAGE_KEY = 'open-weight-chat.reduce-motion';
 const EFFORT_STORAGE_KEY = 'open-weight-chat.default-effort';
+const ARTIFACT_WIDTH_STORAGE_KEY = 'open-weight-chat.artifact-width';
+
+/**
+ * Largura do painel de artefato, em porcentagem da janela.
+ *
+ * Porcentagem, e não pixels: quem arrasta numa tela grande e depois abre num
+ * notebook receberia um painel ocupando a tela inteira. Os limites existem
+ * pelos dois lados — abaixo de 24% o conteúdo do artefato não cabe, acima de
+ * 72% sobra tira de chat.
+ */
+export const ARTIFACT_WIDTH_MIN = 24;
+export const ARTIFACT_WIDTH_MAX = 72;
+export const ARTIFACT_WIDTH_DEFAULT = 42;
+
+export function clampArtifactWidth(value: number): number {
+  if (!Number.isFinite(value)) return ARTIFACT_WIDTH_DEFAULT;
+  return Math.min(ARTIFACT_WIDTH_MAX, Math.max(ARTIFACT_WIDTH_MIN, Math.round(value * 10) / 10));
+}
 
 function initialTheme(): ThemeMode {
   if (typeof window === 'undefined') return 'light';
@@ -21,6 +39,12 @@ function initialDensity(): DensityMode {
 function initialReduceMotion(): boolean {
   if (typeof window === 'undefined') return false;
   return window.localStorage.getItem(MOTION_STORAGE_KEY) === 'true';
+}
+
+function initialArtifactWidth(): number {
+  if (typeof window === 'undefined') return ARTIFACT_WIDTH_DEFAULT;
+  const stored = Number(window.localStorage.getItem(ARTIFACT_WIDTH_STORAGE_KEY));
+  return stored ? clampArtifactWidth(stored) : ARTIFACT_WIDTH_DEFAULT;
 }
 
 /**
@@ -39,10 +63,12 @@ interface SettingsState {
   density: DensityMode;
   reduceMotion: boolean;
   defaultEffort: EffortLevel;
+  artifactWidth: number;
   setTheme: (theme: ThemeMode) => void;
   setDensity: (density: DensityMode) => void;
   setReduceMotion: (reduceMotion: boolean) => void;
   setDefaultEffort: (effort: EffortLevel) => void;
+  setArtifactWidth: (percent: number) => void;
   toggleTheme: () => void;
   resetPreferences: () => void;
 }
@@ -52,6 +78,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   density: initialDensity(),
   reduceMotion: initialReduceMotion(),
   defaultEffort: initialDefaultEffort(),
+  artifactWidth: initialArtifactWidth(),
   setTheme: (theme) => {
     if (typeof window !== 'undefined') window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     set({ theme });
@@ -73,13 +100,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (typeof window !== 'undefined') window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     set({ theme });
   },
+  setArtifactWidth: (percent) => {
+    const largura = clampArtifactWidth(percent);
+    if (typeof window !== 'undefined') window.localStorage.setItem(ARTIFACT_WIDTH_STORAGE_KEY, String(largura));
+    set({ artifactWidth: largura });
+  },
   resetPreferences: () => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(THEME_STORAGE_KEY, 'light');
       window.localStorage.removeItem(DENSITY_STORAGE_KEY);
       window.localStorage.removeItem(MOTION_STORAGE_KEY);
       window.localStorage.removeItem(EFFORT_STORAGE_KEY);
+      window.localStorage.removeItem(ARTIFACT_WIDTH_STORAGE_KEY);
     }
-    set({ theme: 'light', density: 'comfortable', reduceMotion: false, defaultEffort: 'auto' });
+    set({ theme: 'light', density: 'comfortable', reduceMotion: false, defaultEffort: 'auto', artifactWidth: ARTIFACT_WIDTH_DEFAULT });
   },
 }));

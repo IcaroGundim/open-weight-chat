@@ -2,6 +2,31 @@
 
 Cliente de chat self-hosted para provedores OpenAI-compatíveis, com streaming SSE, Markdown seguro, LaTeX, destaque de código, persistência SQLite/Postgres (Neon) e custo por mensagem.
 
+## Planilhas XLSX e CSV
+
+Arquivos `.xlsx` e `.csv` podem ser anexados pelo mesmo botão, arrastados para
+o compositor ou colados. Depois do envio, clique no arquivo dentro da mensagem
+para abrir a bancada de planilha. Ela permite:
+
+- navegar por abas e por uma grade virtualizada;
+- selecionar intervalos, editar células e fórmulas, desfazer e refazer;
+- localizar valores e adicionar abas;
+- salvar com histórico de versões e proteção contra edição concorrente;
+- exportar o workbook atual em XLSX ou a aba atual em CSV;
+- usar um intervalo selecionado como contexto da próxima pergunta do chat.
+
+O modelo recebe somente uma amostra limitada por padrão ou, quando o usuário
+escolhe **Usar seleção no chat**, até 5.000 células do intervalo. Isso evita
+enviar a planilha inteira em toda mensagem. Fórmulas são preservadas na
+importação e exportação, mas a grade não implementa um motor de recálculo — o
+último resultado gravado pelo XLSX é exibido até o arquivo ser recalculado por
+um aplicativo compatível.
+
+O upload continua limitado a 3 MB por causa do transporte base64 da Vercel. O
+parser também limita o workbook a 250.000 células preenchidas e barra XLSX com
+expansão ZIP desproporcional. Em uma instalação existente, aplique a migração
+`010 planilhas` com `pnpm db:migrate up` antes de usar o recurso.
+
 ## Serviço multiusuário
 
 Este projeto virou um serviço multiusuário **BYOK** (bring your own key): cada pessoa entra com **Google ou e-mail via Clerk**, cadastra as **próprias chaves de provedor** em **Configurações → Provedores** e só vê as próprias conversas, provedores, artefatos e custos. Não há créditos nem cobrança na plataforma — e **nenhuma chave da plataforma é usada em produção**: a única fonte de chaves é o cadastro de cada usuário.

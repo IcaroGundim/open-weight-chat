@@ -18,12 +18,18 @@ import { decryptSecret, encryptSecret, getSecretStorageStatus } from './secrets'
 const MASTER = 'chave-mestra-de-teste-bem-longa';
 const USER = 'user_test_1';
 const OTHER = 'user_test_2';
-const API_KEY = 'sk-teste-chave-opencode-98765';
+const API_KEY = 'sk-teste-chave-gateway-98765';
 
+/**
+ * Provedor de exemplo registrado PELO USUÁRIO. Neutro de propósito: um id
+ * embutido apareceria como `builtin` no catálogo e um baseURL do opencode.ai
+ * acionaria o filtro de protocolo (ver opencode.ts), e nenhuma das duas coisas
+ * é o que estes testes medem.
+ */
 const PROVIDER = {
-  label: 'OpenCode Zen',
-  baseURL: 'https://opencode.ai/zen/v1',
-  models: [{ id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', ctx: 272_000, reasoning: true }],
+  label: 'Meu Gateway',
+  baseURL: 'https://gateway.exemplo.com/v1',
+  models: [{ id: 'modelo-rapido', label: 'Modelo Rápido', ctx: 272_000, reasoning: true }],
 };
 
 function appFor(db: ChatDatabase, userId = USER) {
@@ -65,7 +71,7 @@ afterEach(() => {
 describe('cadastro de provedor pela interface (autenticado)', () => {
   it('grava a chave cifrada e nunca a devolve ao navegador', async () => {
     const app = appFor(database);
-    const saved = await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: API_KEY }));
+    const saved = await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: API_KEY }));
     expect(saved.status).toBe(200);
     expect((await saved.json()).provider.hasKey).toBe(true);
 
@@ -78,22 +84,22 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
     // Nem em texto puro no banco; e decifra apenas com o contexto do dono.
     const [record] = database.listProviderSettings(USER);
     expect(record.apiKeyCipher).not.toContain(API_KEY);
-    expect(decryptSecret(record.apiKeyCipher, { userId: USER, providerId: 'opencode' })).toBe(API_KEY);
+    expect(decryptSecret(record.apiKeyCipher, { userId: USER, providerId: 'meu-gateway' })).toBe(API_KEY);
     // Contexto errado (outro usuário/provedor) não decifra.
-    expect(decryptSecret(record.apiKeyCipher, { userId: OTHER, providerId: 'opencode' })).toBeNull();
+    expect(decryptSecret(record.apiKeyCipher, { userId: OTHER, providerId: 'meu-gateway' })).toBeNull();
   });
 
   it('coloca o provedor no catálogo do usuário e o marca como configurado', async () => {
     const app = appFor(database);
-    await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: API_KEY }));
+    await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: API_KEY }));
 
     // Resolução por usuário: URL e chave vêm do registro dele.
-    const resolved = await resolveProvider(USER, 'opencode', database);
-    expect(resolved?.baseURL).toBe('https://opencode.ai/zen/v1');
+    const resolved = await resolveProvider(USER, 'meu-gateway', database);
+    expect(resolved?.baseURL).toBe('https://gateway.exemplo.com/v1');
     expect(resolved?.apiKey).toBe(API_KEY);
 
     const catalog = await (await app.request('/api/models', { headers: authHeader() })).json();
-    const entry = catalog.providers.find((item: { id: string }) => item.id === 'opencode');
+    const entry = catalog.providers.find((item: { id: string }) => item.id === 'meu-gateway');
     expect(entry.source).toBe('custom');
     expect(entry.configured).toBe(true);
   });
@@ -110,14 +116,14 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
         });
         return new Response(JSON.stringify({
           data: [
-            { id: 'zen-fast', name: 'Zen Fast', context_length: 200_000 },
-            { id: 'zen-reasoner', name: 'Zen Reasoner', reasoning: true },
+            { id: 'rapido', name: 'Rápido', context_length: 200_000 },
+            { id: 'pensante', name: 'Pensante', reasoning: true },
           ],
         }), { headers: { 'content-type': 'application/json' } });
       },
     });
 
-    const saved = await app.request('/api/providers/opencode', json({
+    const saved = await app.request('/api/providers/meu-gateway', json({
       ...PROVIDER,
       models: [],
       apiKey: API_KEY,
@@ -125,17 +131,17 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
     expect(saved.status).toBe(200);
     expect((await saved.json()).provider.models).toHaveLength(0);
 
-    const discovered = await app.request('/api/providers/opencode/discover-models', { method: 'POST', headers: authHeader() });
+    const discovered = await app.request('/api/providers/meu-gateway/discover-models', { method: 'POST', headers: authHeader() });
     expect(discovered.status).toBe(200);
     const payload = await discovered.json();
     expect(payload.discovered).toBe(2);
-    expect(payload.provider.models[0]).toMatchObject({ id: 'zen-fast', ctx: 200_000 });
-    expect(payload.provider.models[1]).toMatchObject({ id: 'zen-reasoner', ctx: 131_072, reasoning: true });
+    expect(payload.provider.models[0]).toMatchObject({ id: 'rapido', ctx: 200_000 });
+    expect(payload.provider.models[1]).toMatchObject({ id: 'pensante', ctx: 131_072, reasoning: true });
     // A chave DO USUÁRIO foi enviada ao upstream — e só ela.
-    expect(requests).toEqual([{ url: 'https://opencode.ai/zen/v1/models', authorization: `Bearer ${API_KEY}` }]);
+    expect(requests).toEqual([{ url: 'https://gateway.exemplo.com/v1/models', authorization: `Bearer ${API_KEY}` }]);
 
     const catalog = await (await app.request('/api/models', { headers: authHeader() })).json();
-    expect(catalog.providers.find((item: { id: string }) => item.id === 'opencode').models).toHaveLength(2);
+    expect(catalog.providers.find((item: { id: string }) => item.id === 'meu-gateway').models).toHaveLength(2);
   });
 
   it('configura um provedor embutido pela web e substitui o catálogo ao descobrir modelos', async () => {
@@ -183,7 +189,7 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
   it('gera a chave-mestra automaticamente quando o cadastro vem pela web', async () => {
     delete process.env.PROVIDER_SECRET_KEY;
     const app = appFor(database);
-    const response = await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: API_KEY }));
+    const response = await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: API_KEY }));
     expect(response.status).toBe(200);
     expect((await response.json()).provider.hasKey).toBe(true);
     expect(getSecretStorageStatus().available).toBe(true);
@@ -192,15 +198,15 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
 
   it('salva sem chave quando o campo não é enviado e mantém a chave em edições seguintes', async () => {
     const app = appFor(database);
-    await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: API_KEY }));
+    await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: API_KEY }));
     // Edição sem o campo apiKey: o segredo precisa sobreviver.
-    await app.request('/api/providers/opencode', json({ ...PROVIDER, label: 'Renomeado' }));
+    await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, label: 'Renomeado' }));
     const [record] = database.listProviderSettings(USER);
     expect(record.label).toBe('Renomeado');
-    expect(decryptSecret(record.apiKeyCipher, { userId: USER, providerId: 'opencode' })).toBe(API_KEY);
+    expect(decryptSecret(record.apiKeyCipher, { userId: USER, providerId: 'meu-gateway' })).toBe(API_KEY);
 
     // apiKey: null apaga.
-    await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: null }));
+    await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: null }));
     expect(database.listProviderSettings(USER)[0].apiKeyCipher).toBeNull();
   });
 
@@ -220,14 +226,14 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
 
   it('recusa modelo sem janela de contexto', async () => {
     const app = appFor(database);
-    const response = await app.request('/api/providers/opencode', json({ ...PROVIDER, models: [{ id: 'x' }] }));
+    const response = await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, models: [{ id: 'x' }] }));
     expect(response.status).toBe(400);
     expect((await response.json()).error.message).toContain('contexto');
   });
 
   it('rejeita URL base insegura (SSRF) antes de salvar', async () => {
     const app = appFor(database);
-    const response = await app.request('/api/providers/opencode', json({
+    const response = await app.request('/api/providers/meu-gateway', json({
       ...PROVIDER,
       baseURL: 'http://169.254.169.254/latest/meta-data',
       apiKey: API_KEY,
@@ -239,10 +245,10 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
 
   it('remove o provedor do usuário ao apagar', async () => {
     const app = appFor(database);
-    await app.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: API_KEY }));
+    await app.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: API_KEY }));
     expect(database.listProviderSettings(USER)).toHaveLength(1);
 
-    const removed = await app.request('/api/providers/opencode', { method: 'DELETE', headers: authHeader() });
+    const removed = await app.request('/api/providers/meu-gateway', { method: 'DELETE', headers: authHeader() });
     expect(removed.status).toBe(200);
     expect(database.listProviderSettings(USER)).toHaveLength(0);
   });
@@ -251,25 +257,25 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
     const appA = appFor(database, USER);
     const appB = appFor(database, OTHER);
 
-    await appA.request('/api/providers/opencode', json({ ...PROVIDER, apiKey: API_KEY }));
+    await appA.request('/api/providers/meu-gateway', json({ ...PROVIDER, apiKey: API_KEY }));
 
     // B não vê nenhum provedor.
     const listByB = await appB.request('/api/providers', { headers: authHeader(OTHER) });
     expect((await listByB.json()).providers).toHaveLength(0);
 
     // B não apaga o de A (404) e o registro de A continua intacto.
-    const deleteByB = await appB.request('/api/providers/opencode', { method: 'DELETE', headers: authHeader(OTHER) });
+    const deleteByB = await appB.request('/api/providers/meu-gateway', { method: 'DELETE', headers: authHeader(OTHER) });
     expect(deleteByB.status).toBe(404);
     const [recordA] = database.listProviderSettings(USER);
     expect(recordA).toBeDefined();
-    expect(decryptSecret(recordA.apiKeyCipher, { userId: USER, providerId: 'opencode' })).toBe(API_KEY);
+    expect(decryptSecret(recordA.apiKeyCipher, { userId: USER, providerId: 'meu-gateway' })).toBe(API_KEY);
 
     // B não descobre modelos do provedor de A (sem registro próprio → 404).
-    const discoverByB = await appB.request('/api/providers/opencode/discover-models', { method: 'POST', headers: authHeader(OTHER) });
+    const discoverByB = await appB.request('/api/providers/meu-gateway/discover-models', { method: 'POST', headers: authHeader(OTHER) });
     expect(discoverByB.status).toBe(404);
 
     // B pode criar o MESMO id com a SUA chave: registro separado, sem tocar A.
-    const putByB = await appB.request('/api/providers/opencode', json({
+    const putByB = await appB.request('/api/providers/meu-gateway', json({
       ...PROVIDER,
       label: 'OpenCode Zen do B',
       apiKey: 'sk-teste-chave-do-b-11111',
@@ -277,15 +283,15 @@ describe('cadastro de provedor pela interface (autenticado)', () => {
     expect(putByB.status).toBe(200);
     const [recordB] = database.listProviderSettings(OTHER);
     expect(recordB.label).toBe('OpenCode Zen do B');
-    expect(decryptSecret(recordB.apiKeyCipher, { userId: OTHER, providerId: 'opencode' })).toBe('sk-teste-chave-do-b-11111');
+    expect(decryptSecret(recordB.apiKeyCipher, { userId: OTHER, providerId: 'meu-gateway' })).toBe('sk-teste-chave-do-b-11111');
     // A continua com a chave dele.
-    expect(decryptSecret(recordA.apiKeyCipher, { userId: USER, providerId: 'opencode' })).toBe(API_KEY);
+    expect(decryptSecret(recordA.apiKeyCipher, { userId: USER, providerId: 'meu-gateway' })).toBe(API_KEY);
   });
 
   it('não decifra com outra chave-mestra', () => {
-    const blob = encryptSecret(API_KEY, { userId: USER, providerId: 'opencode' });
+    const blob = encryptSecret(API_KEY, { userId: USER, providerId: 'meu-gateway' });
     process.env.PROVIDER_SECRET_KEY = 'outra-chave-mestra-diferente';
     expect(getSecretStorageStatus().available).toBe(true);
-    expect(decryptSecret(blob, { userId: USER, providerId: 'opencode' })).toBeNull();
+    expect(decryptSecret(blob, { userId: USER, providerId: 'meu-gateway' })).toBeNull();
   });
 });

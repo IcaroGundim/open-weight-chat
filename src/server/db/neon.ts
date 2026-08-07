@@ -19,6 +19,8 @@ import {
 import { parseEffortColumn } from '../effort';
 import type { ChatDatabaseAdapter } from './database';
 import type {
+  AttachmentRecord,
+  CreateAttachmentData,
   CreateConversationData,
   CreateMessageData,
   InsertArtifactVersionData,
@@ -26,7 +28,10 @@ import type {
   UpdateConversationData,
   UpdateMessageData,
   UpsertArtifactData,
+  SearchSettingsRecord,
   UpsertProviderSettingsData,
+  UpsertSearchSettingsData,
+  SpreadsheetVersionRecord,
 } from './queries';
 
 type Row = Record<string, unknown>;
@@ -38,7 +43,14 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS conversations (
   id text PRIMARY KEY, user_id text NOT NULL DEFAULT '', title text, provider_id text NOT NULL, model_id text NOT NULL,
   system_prompt text, effort text, created_at bigint NOT NULL, updated_at bigint NOT NULL,
-  archived boolean NOT NULL DEFAULT false
+  archived boolean NOT NULL DEFAULT false,
+  science_level TEXT,
+  science_format TEXT
+);
+CREATE TABLE IF NOT EXISTS search_settings (
+  user_id text PRIMARY KEY, backend text NOT NULL, base_url text, api_key_cipher text,
+  max_results integer NOT NULL DEFAULT 5, enabled boolean NOT NULL DEFAULT true,
+  created_at bigint NOT NULL, updated_at bigint NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);
@@ -53,7 +65,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at, id);
 CREATE TABLE IF NOT EXISTS artifacts (
   id text PRIMARY KEY, conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  slug text NOT NULL, kind text NOT NULL CHECK (kind IN ('markdown','code','svg','mermaid')),
+  slug text NOT NULL, kind text NOT NULL CHECK (kind IN ('markdown','code','svg','mermaid','mindmap','chart')),
   language text, title text NOT NULL, current_version integer NOT NULL DEFAULT 0,
   created_at bigint NOT NULL, updated_at bigint NOT NULL, UNIQUE (conversation_id, slug)
 );
@@ -132,6 +144,8 @@ function conversationBase(row: Row): Omit<ConversationSummary, 'messageCount' | 
   return {
     id: text(row.id), title: nullableText(row.title), providerId: id, modelId: text(row.model_id),
     systemPrompt: nullableText(row.system_prompt), effort: parseEffortColumn(row.effort),
+      scienceLevel: (row.science_level as never) ?? 'off',
+      scienceFormat: (row.science_format as never) ?? undefined,
     createdAt: number(row.created_at),
     updatedAt: number(row.updated_at), archived: bool(row.archived),
   };
@@ -139,6 +153,23 @@ function conversationBase(row: Row): Omit<ConversationSummary, 'messageCount' | 
 
 function summary(row: Row): ConversationSummary {
   return { ...conversationBase(row), messageCount: number(row.message_count), totalCostUsd: Math.max(0, number(row.total_cost_usd)) };
+}
+
+function attachmentFromRow(row: Record<string, unknown>): AttachmentRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    conversationId: row.conversation_id == null ? null : String(row.conversation_id),
+    messageId: row.message_id == null ? null : String(row.message_id),
+    kind: String(row.kind) === 'image' ? 'image' : 'document',
+    filename: String(row.filename),
+    mime: String(row.mime),
+    sizeBytes: Number(row.size_bytes),
+    dataBase64: row.data_base64 == null ? null : String(row.data_base64),
+    extractedText: row.extracted_text == null ? null : String(row.extracted_text),
+    truncated: bool(row.truncated),
+    createdAt: number(row.created_at),
+  };
 }
 
 export class NeonChatDatabase implements ChatDatabaseAdapter {
@@ -168,10 +199,10 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const id = data.id ?? randomUUID();
     const now = data.createdAt ?? Date.now();
     await this.rows(
-      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,created_at,updated_at,archived)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,false) RETURNING *`,
+      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,science_level,science_format,created_at,updated_at,archived)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,false) RETURNING *`,
       [id, userId, data.title ?? 'Nova conversa', data.providerId, data.modelId, data.systemPrompt ?? null,
-        data.effort ?? 'auto', now],
+        data.effort ?? 'auto', data.scienceLevel ?? 'off', data.scienceFormat ?? null, now],
     );
     return await this.getConversation(userId, id) as Conversation;
   }
@@ -196,11 +227,12 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const current = await this.getConversation(userId, id);
     if (!current) return null;
     await this.rows(
-      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,archived=$8,updated_at=$9
+      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,science_level=$8,science_format=$9,archived=$10,updated_at=$11
         WHERE id=$1 AND user_id=$2 RETURNING *`,
       [id, userId, data.title === undefined ? current.title : data.title, data.providerId ?? current.providerId,
         data.modelId ?? current.modelId, data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt,
-        data.effort ?? current.effort, data.archived ?? current.archived, Date.now()],
+        data.effort ?? current.effort, data.scienceLevel ?? current.scienceLevel ?? 'off',
+        data.scienceFormat ?? current.scienceFormat ?? null, data.archived ?? current.archived, Date.now()],
     );
     return this.getConversation(userId, id);
   }
@@ -311,6 +343,113 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     [userId, conversationId, slug, versionNumber, outputTokens, costUsd])).length > 0;
   }
 
+  // --- Anexos -------------------------------------------------------------
+
+  async createAttachment(userId: string, data: CreateAttachmentData): Promise<AttachmentRecord> {
+    const record: AttachmentRecord = {
+      id: data.id ?? randomUUID(),
+      userId,
+      conversationId: null,
+      messageId: null,
+      kind: data.kind,
+      filename: data.filename,
+      mime: data.mime,
+      sizeBytes: data.sizeBytes,
+      dataBase64: data.dataBase64,
+      extractedText: data.extractedText,
+      truncated: data.truncated,
+      createdAt: Date.now(),
+    };
+    await this.rows(
+      `INSERT INTO attachments (id, user_id, conversation_id, message_id, kind, filename, mime, size_bytes, data_base64, extracted_text, truncated, created_at)
+       VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [record.id, userId, record.kind, record.filename, record.mime, record.sizeBytes,
+        record.dataBase64, record.extractedText, record.truncated, record.createdAt],
+    );
+    return record;
+  }
+
+  /** Sempre por dono: anexo de outro usuário não existe para quem pergunta. */
+  async getAttachment(userId: string, id: string): Promise<AttachmentRecord | null> {
+    const rows = await this.rows('SELECT * FROM attachments WHERE user_id=$1 AND id=$2', [userId, id]);
+    return rows[0] ? attachmentFromRow(rows[0]) : null;
+  }
+
+  async getAttachments(userId: string, ids: readonly string[]): Promise<AttachmentRecord[]> {
+    if (ids.length === 0) return [];
+    // ANY($2) em vez de IN com N marcadores: o número de parâmetros deixa de
+    // variar com a quantidade de anexos.
+    const rows = await this.rows(
+      'SELECT * FROM attachments WHERE user_id=$1 AND id = ANY($2) ORDER BY created_at ASC',
+      [userId, ids as string[]],
+    );
+    return rows.map(attachmentFromRow);
+  }
+
+  async attachToMessage(userId: string, ids: readonly string[], conversationId: string, messageId: string): Promise<void> {
+    if (ids.length === 0) return;
+    await this.rows(
+      `UPDATE attachments SET conversation_id=$1, message_id=$2
+       WHERE user_id=$3 AND id = ANY($4) AND message_id IS NULL`,
+      [conversationId, messageId, userId, ids as string[]],
+    );
+  }
+
+  async listAttachmentsForConversation(userId: string, conversationId: string): Promise<AttachmentRecord[]> {
+    const rows = await this.rows(
+      'SELECT * FROM attachments WHERE user_id=$1 AND conversation_id=$2 ORDER BY created_at ASC',
+      [userId, conversationId],
+    );
+    return rows.map(attachmentFromRow);
+  }
+
+  async deleteAttachment(userId: string, id: string): Promise<boolean> {
+    // Só o que ainda não foi enviado: apagar um anexo já usado deixaria a
+    // mensagem falando de um arquivo que não existe mais.
+    const rows = await this.rows(
+      'DELETE FROM attachments WHERE user_id=$1 AND id=$2 AND message_id IS NULL RETURNING id',
+      [userId, id],
+    );
+    return rows.length > 0;
+  }
+
+  async deleteOrphanAttachments(userId: string, olderThanMs: number): Promise<number> {
+    const rows = await this.rows(
+      'DELETE FROM attachments WHERE user_id=$1 AND message_id IS NULL AND created_at < $2 RETURNING id',
+      [userId, Date.now() - olderThanMs],
+    );
+    return rows.length;
+  }
+
+  async getSpreadsheetVersion(userId: string, attachmentId: string, versionNumber?: number): Promise<SpreadsheetVersionRecord | null> {
+    const params: unknown[] = [userId, attachmentId];
+    const versionClause = versionNumber === undefined ? '' : 'AND sv.version=$3';
+    if (versionNumber !== undefined) params.push(versionNumber);
+    const [row] = await this.rows(
+      `SELECT sv.* FROM spreadsheet_versions sv
+       JOIN attachments a ON a.id=sv.attachment_id AND a.user_id=$1 AND a.kind='spreadsheet'
+       WHERE sv.attachment_id=$2 ${versionClause} ORDER BY sv.version DESC LIMIT 1`,
+      params,
+    );
+    return row ? { attachmentId: text(row.attachment_id), version: number(row.version), workbookJson: text(row.workbook_json), createdAt: number(row.created_at) } : null;
+  }
+
+  async insertSpreadsheetVersion(userId: string, attachmentId: string, workbookJson: string, baseVersion?: number): Promise<SpreadsheetVersionRecord | null> {
+    const expected = baseVersion ?? 0;
+    const next = expected + 1;
+    const createdAt = Date.now();
+    const [row] = await this.rows(
+      `INSERT INTO spreadsheet_versions (attachment_id,version,workbook_json,created_at)
+       SELECT id,$3,$4,$5 FROM attachments
+       WHERE id=$2 AND user_id=$1 AND kind='spreadsheet'
+         AND COALESCE((SELECT MAX(version) FROM spreadsheet_versions WHERE attachment_id=$2),0)=$6
+       ON CONFLICT (attachment_id,version) DO NOTHING
+       RETURNING *`,
+      [userId, attachmentId, next, workbookJson, createdAt, expected],
+    );
+    return row ? { attachmentId: text(row.attachment_id), version: number(row.version), workbookJson: text(row.workbook_json), createdAt: number(row.created_at) } : null;
+  }
+
   async listProviderSettings(userId: string): Promise<ProviderSettingsRecord[]> {
     return (await this.rows('SELECT * FROM provider_settings WHERE user_id=$1 ORDER BY label ASC,id ASC', [userId])).map((row) => ({
       id: text(row.id), label: text(row.label), baseURL: text(row.base_url),
@@ -337,6 +476,51 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
 
   async deleteProviderSettings(userId: string, id: string): Promise<boolean> {
     return (await this.rows('DELETE FROM provider_settings WHERE id=$1 AND user_id=$2 RETURNING id', [id, userId])).length > 0;
+  }
+
+  async getSearchSettings(userId: string): Promise<SearchSettingsRecord | null> {
+    const rows = await this.rows('SELECT * FROM search_settings WHERE user_id=$1', [userId]);
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      backend: String(row.backend),
+      baseURL: row.base_url === null || row.base_url === undefined ? null : String(row.base_url),
+      apiKeyCipher: row.api_key_cipher === null || row.api_key_cipher === undefined ? null : String(row.api_key_cipher),
+      maxResults: Number(row.max_results),
+      enabled: bool(row.enabled),
+      createdAt: number(row.created_at),
+      updatedAt: number(row.updated_at),
+    };
+  }
+
+  async upsertSearchSettings(userId: string, data: UpsertSearchSettingsData): Promise<SearchSettingsRecord> {
+    const existing = await this.getSearchSettings(userId);
+    const now = Date.now();
+    // `apiKeyCipher: undefined` preserva a chave gravada — mesma disciplina do
+    // upsert de provedores.
+    const cipher = data.apiKeyCipher === undefined ? existing?.apiKeyCipher ?? null : data.apiKeyCipher;
+    const record: SearchSettingsRecord = {
+      backend: data.backend,
+      baseURL: data.baseURL === undefined ? existing?.baseURL ?? null : data.baseURL,
+      apiKeyCipher: cipher,
+      maxResults: data.maxResults ?? existing?.maxResults ?? 5,
+      enabled: data.enabled ?? existing?.enabled ?? true,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await this.rows(
+      `INSERT INTO search_settings (user_id,backend,base_url,api_key_cipher,max_results,enabled,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (user_id) DO UPDATE SET
+         backend=EXCLUDED.backend, base_url=EXCLUDED.base_url, api_key_cipher=EXCLUDED.api_key_cipher,
+         max_results=EXCLUDED.max_results, enabled=EXCLUDED.enabled, updated_at=EXCLUDED.updated_at`,
+      [userId, record.backend, record.baseURL, record.apiKeyCipher, record.maxResults, record.enabled, record.createdAt, record.updatedAt],
+    );
+    return record;
+  }
+
+  async deleteSearchSettings(userId: string): Promise<boolean> {
+    return (await this.rows('DELETE FROM search_settings WHERE user_id=$1 RETURNING user_id', [userId])).length > 0;
   }
 
   async searchConversations(userId: string, query: string): Promise<ConversationSummary[]> {

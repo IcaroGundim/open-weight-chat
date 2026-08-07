@@ -32,6 +32,36 @@
   --sidebar-ink-2: #c3b2a5;
   --sidebar-wine: #e0899c;
 
+  /* O artefato é sempre o negativo da página: lasca escura sobre papel claro,
+     lasca bege sobre papel escuro. Tokens próprios, e não os da sidebar, por
+     isso mesmo — os dela são a constante da marca e não viram com o tema. */
+  --artifact-bg: #2a211c;
+  --artifact-bg-hover: #382c26;
+  --artifact-rule: #544339;
+  --artifact-rule-hover: #463830;
+  --artifact-ink: #f6efe7;
+  --artifact-ink-2: #c3b2a5;
+  --artifact-accent: #e0899c;
+  /* Degraus da trama de pontos do fundo (ArtifactWaves), do ponto quase
+     ausente ao mais aceso. Alfas baixos: é textura atrás de texto. */
+  /* Paleta categórica dos gráficos.
+     Validada por script contra a superfície REAL deste app (não contra um
+     branco genérico): banda de luminosidade, piso de croma, separação para
+     daltonismo (pior par adjacente ΔE 9.1 protanopia) e piso de visão normal
+     (ΔE 19.6). A ordem é fixa e a cor segue a POSIÇÃO da série — reordenar ou
+     filtrar não pode repintar o que sobrou.
+     Três destas ficam abaixo de 3:1 contra o papel claro; é por isso que o
+     gráfico traz tabela alternativa, e não por gosto. */
+  --serie-1: #2a78d6;
+  --serie-2: #eb6834;
+  --serie-3: #1baf7a;
+  --serie-4: #eda100;
+  --serie-5: #e87ba4;
+  --serie-6: #008300;
+  --artifact-wave-1: rgba(246, 239, 231, 0.03);
+  --artifact-wave-2: rgba(224, 137, 156, 0.09);
+  --artifact-wave-3: rgba(246, 239, 231, 0.13);
+
   --code-bg: #241c18;
   --code-ink: #e3d8cc;
 
@@ -74,6 +104,29 @@
   /* A barra lateral mantém o mesmo marrom nos dois temas: ela é a constante da
      marca, o canvas é que muda. No escuro ela fica acima do canvas (1.18:1),
      não abaixo — afundá-la a tornava indistinguível do fundo. */
+
+  /* Invertido: no escuro o artefato assume o bege do tema claro. O contraste
+     do par --artifact-ink-2 sobre --artifact-bg fica em 4,6:1, acima do piso
+     para os 12px da linha de meta. */
+  --artifact-bg: #f3eee6;
+  --artifact-bg-hover: #e8e0d4;
+  --artifact-rule: #dcd2c4;
+  --artifact-rule-hover: #94836f;
+  --artifact-ink: #1b1512;
+  --artifact-ink-2: #756860;
+  --artifact-accent: #7a2338;
+  /* Os mesmos seis matizes, RE-ESCALONADOS para a superfície escura — não é
+     uma inversão automática do tema claro. Aqui as seis passam também no
+     contraste (todas ≥ 3:1). */
+  --serie-1: #3987e5;
+  --serie-2: #d95926;
+  --serie-3: #199e70;
+  --serie-4: #c98500;
+  --serie-5: #d55181;
+  --serie-6: #008300;
+  --artifact-wave-1: rgba(27, 21, 18, 0.02);
+  --artifact-wave-2: rgba(122, 35, 56, 0.07);
+  --artifact-wave-3: rgba(27, 21, 18, 0.10);
 
   --code-bg: #0f0c0a;
   --code-ink: #dcd1c6;
@@ -247,8 +300,17 @@ kbd {
   will-change: grid-template-columns;
 }
 .chat-app.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) minmax(0px, 0%); }
-.chat-app.artifact-panel-open { grid-template-columns: 276px minmax(0, 1fr) minmax(360px, 42%); }
-.chat-app.sidebar-collapsed.artifact-panel-open { grid-template-columns: 0 minmax(0, 1fr) minmax(360px, 42%); }
+/* A largura do painel vem de `--largura-artefato`, gravada pelo divisor. O
+   `minmax` continua sendo o piso: mesmo com a variável em valor pequeno, o
+   conteúdo do artefato não é espremido abaixo do legível. */
+.chat-app.artifact-panel-open { grid-template-columns: 276px minmax(0, 1fr) minmax(320px, var(--largura-artefato, 42%)); }
+.chat-app.sidebar-collapsed.artifact-panel-open { grid-template-columns: 0 minmax(0, 1fr) minmax(320px, var(--largura-artefato, 42%)); }
+/* Durante o arrasto a transição de 0,22s sai de cena: com ela, a coluna
+   persegue o ponteiro com atraso e o divisor parece descolado da mão. */
+body[data-redimensionando] .chat-app { transition: none; }
+/* E o texto para de ser selecionado — arrastar sobre a conversa selecionaria
+   a resposta inteira. */
+body[data-redimensionando] { user-select: none; cursor: col-resize; }
 
 .chat-main {
   display: flex;
@@ -260,33 +322,213 @@ kbd {
 
 /* --------------------------------------------------------- artefatos --- */
 
-.artifact-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 10px;
-  margin: 12px 0;
-  padding: 10px 11px;
-  color: var(--ink);
-  background: var(--surface);
-  border-radius: var(--r-3);
+/* O feixe do cartão de artefato precisa de um ângulo animável, e uma custom
+   property só interpola se estiver registrada. A @usefragments/ui registra
+   uma com este mesmo papel, mas depender dela deixaria a animação morrer em
+   silêncio se a biblioteca saísse. */
+@property --artefato-feixe {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
 }
-.artifact-card-icon {
+
+.artifact-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  /* Encolhe até o conteúdo em vez de ocupar a coluna inteira. Esticado, o
+     cartão abria um vão morto entre o título e a direita e lia como linha de
+     template; do tamanho do próprio nome, lê como o arquivo que ele é. */
+  width: fit-content;
+  max-width: 100%;
+  margin: 14px 0;
+  padding: 9px 13px 9px 11px;
+  font: inherit;
+  /* Paleta da barra lateral, não a da superfície do chat. Ela é a única do
+     sistema que não muda entre claro e escuro, então o artefato fica sendo o
+     mesmo objeto nos dois temas — e, no claro, uma lasca escura no meio da
+     prosa lê como coisa anexada à conversa, não como mais um bloco dela. */
+  color: var(--artifact-ink);
+  text-align: left;
+  background: var(--artifact-bg);
+  border: 1px solid var(--artifact-rule);
+  border-radius: var(--r-3);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.artifact-card:hover { background: var(--artifact-bg-hover); border-color: var(--artifact-rule-hover); }
+.artifact-card:hover .artifact-card-chevron { color: var(--artifact-accent); transform: translateX(2px); }
+/* Aberto: o chevron gira. É o que confirma, sem texto, que aquele cartão é o
+   dono do painel e que clicar ali de novo fecha. */
+.artifact-card[aria-expanded='true'] .artifact-card-chevron { color: var(--artifact-accent); transform: rotate(90deg); }
+.artifact-card[aria-expanded='true']:hover .artifact-card-chevron { transform: rotate(90deg) translateX(2px); }
+.artifact-card:hover .artifact-card-mark { opacity: 1; }
+
+/* Cartão sendo escrito agora: um feixe percorre o contorno. É sinal, não
+   enfeite — por isso não roda nos cartões já assentados, que numa conversa
+   longa somariam dezenas de animações perpétuas.
+   A borda vira transparente e o anel inteiro passa a ser o gradiente; o
+   ::after devolve a superfície por dentro. Sem `overflow: hidden` de
+   propósito: é justamente ele que, no componente da biblioteca, recortava o
+   feixe para dentro da borda e o tornava invisível. */
+.artifact-card[data-streaming] { border-color: transparent; }
+.artifact-card[data-streaming]::before,
+.artifact-card[data-streaming]::after {
+  content: '';
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+}
+/* Halo estático em volta do cartão vivo. Estático de propósito: animar
+   box-shadow é pintura de CPU e foi exatamente o que travou a marca da tela
+   de login. Aqui só o ângulo do feixe anima, e ângulo é composição.
+   Neutro, e não vinho: o feixe é cromado, e um halo colorido brigaria com
+   ele em vez de assentá-lo. */
+.artifact-card[data-streaming] {
+  box-shadow: 0 0 0 1px rgb(148 152 160 / 0.28),
+              0 0 20px -5px rgb(120 126 136 / 0.5);
+}
+
+/* Feixe cromado.
+   A leitura de metal não vem de uma cor: vem de DOIS polos claros em lados
+   opostos, separados por vales escuros — é o reflexo do horizonte numa
+   superfície curva. Um polo só lê como "brilho", dois lêem como "cromado".
+   As franjas quente e fria ladeiam cada polo em saturação baixa: cor
+   suficiente para o metal não parecer cinza morto, pouca o bastante para não
+   virar arco-íris. Os stops são densos de propósito — gradiente cônico com
+   poucas paradas mostra banda visível na diagonal.
+   Cores literais em vez de tokens: a paleta do projeto não tem eixo neutro
+   frio nem franja, e derivá-las de --ink daria um cinza chapado sem reflexo. */
+.artifact-card[data-streaming]::before {
+  inset: -1px;
+  background: conic-gradient(
+    from var(--artefato-feixe),
+    #5b6068 0deg,
+    #7e8a9c 16deg,
+    #6fc9d8 28deg,
+    #a6cdf5 40deg,
+    #f5f8fb 50deg,
+    #f2c384 60deg,
+    #dc8fa6 72deg,
+    #9a90bc 86deg,
+    #6a6f7d 106deg,
+    #575c65 140deg,
+    #7c828c 170deg,
+    #7fd6b0 188deg,
+    #a9c8ec 204deg,
+    #eff2f6 218deg,
+    #e6b3d2 230deg,
+    #bfa2e2 244deg,
+    #9a9ea6 264deg,
+    #656a73 298deg,
+    #5b6068 330deg,
+    #5b6068 360deg
+  );
+
+
+  animation: artefato-feixe 3s linear infinite;
+}
+.artifact-card[data-streaming]::after {
+  inset: 1px;
+  background: var(--artifact-bg);
+}
+/* O conteúdo sobe acima das duas camadas do anel. */
+.artifact-card > * { position: relative; z-index: 1; }
+@keyframes artefato-feixe {
+  to { --artefato-feixe: 360deg; }
+}
+
+/* A trama de pontos vive num canvas WebGL próprio (ArtifactWaves), atrás do
+   conteúdo. Recorta a si mesma pelo border-radius herdado em vez de pedir
+   `overflow: hidden` ao cartão: o cartão não pode recortar, porque o feixe
+   cromado sangra 1px para fora da borda e sumiria — foi assim que o feixe do
+   componente da biblioteca ficava invisível. */
+.artifact-card-waves {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* Sem movimento: o anel para num ângulo fixo em vez de sumir. O estado
+   "sendo escrito" continua legível — quem pediu menos animação pediu menos
+   movimento, não menos informação.
+   20deg e não um valor qualquer: é onde um polo claro cai na aresta de cima,
+   com a franja fria ao lado. Parar num vale escuro deixaria o cartão com
+   cara de contorno preto, não de cromo. */
+@media (prefers-reduced-motion: reduce) {
+  .artifact-card[data-streaming]::before { animation: none; --artefato-feixe: 20deg; }
+}
+/* Ícone solto, sem a caixa tingida que tinha antes. Um glifo dentro de um
+   quadrado pastel arredondado é o tique mais reconhecível de interface saída
+   de gerador — e a caixa não carregava informação nenhuma que o próprio
+   ícone já não desse. */
+.artifact-card-mark {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  color: var(--wine);
-  background: var(--wine-tint);
-  border-radius: var(--r-2);
+  width: 18px;
+  /* Mesclado com o cartão: o ícone informa o tipo, mas não disputa a primeira
+     leitura com o título. Rebaixado ao tom secundário e recuado por opacidade,
+     ele assenta na superfície em vez de flutuar sobre ela — e sobe no hover,
+     junto com o resto do cartão. */
+  color: var(--artifact-ink-2);
+  opacity: 0.62;
+  transition: opacity 0.15s ease;
 }
-.artifact-card-copy { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.artifact-card-copy { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
 .artifact-card-copy strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.artifact-card-copy span { overflow: hidden; color: var(--ink-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.artifact-card-metrics { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
-.artifact-card-open { color: var(--wine); }
+.artifact-card-meta { overflow: hidden; color: var(--artifact-ink-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-card-chevron { flex: none; color: var(--artifact-ink-2); transition: color 0.15s ease, transform 0.15s ease; }
+
+/* Divisor entre chat e artefato. A linha é fina porque é uma divisa; a área
+   sensível é larga porque acertar 1px com o mouse é perícia, não interação. */
+.artifact-resizer {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  z-index: 30;
+  width: 11px;
+  height: 100%;
+  cursor: col-resize;
+  /* `col-resize` já é o convite; um fundo aqui viraria uma faixa visível
+     dividindo a tela ao meio. */
+  background: transparent;
+  touch-action: none;
+}
+.artifact-resizer-alca {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 3px;
+  height: 46px;
+  transform: translateY(-50%);
+  background: var(--rule-strong);
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+/* A alça aparece na aproximação: parada, a divisa já é dita pela borda do
+   painel, e um traço permanente no meio da tela seria ruído. */
+.artifact-resizer:hover .artifact-resizer-alca,
+.artifact-resizer:focus-visible .artifact-resizer-alca,
+body[data-redimensionando] .artifact-resizer-alca { opacity: 1; background: var(--wine); }
+.artifact-resizer:focus-visible { outline: none; }
+
+/* Na bancada de planilha a divisa poderia se perder no meio das linhas da
+   grade. A alça fica discretamente visível para deixar claro que o painel é
+   redimensionável, sem exigir que a pessoa descubra os 11px no escuro. */
+.spreadsheet-panel > .artifact-resizer .artifact-resizer-alca {
+  height: 72px;
+  opacity: 0.58;
+}
 
 .artifact-panel {
+  /* Âncora do divisor, que é posicionado em relação a esta borda. */
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -302,6 +544,65 @@ kbd {
      inicial durante o atraso, senão ele pisca visível antes de começar. */
   animation: artifact-panel-in 0.16s ease 0.1s both;
 }
+
+/* Planilha ocupa a mesma terceira coluna dos artefatos, mas é uma bancada de
+   dados: a grade fica sem padding e os controles se agrupam por função. */
+.spreadsheet-panel {
+  position: relative;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: var(--ink);
+  background: var(--paper);
+  border-left: 1px solid var(--rule);
+  animation: artifact-panel-in 0.16s ease 0.1s both;
+}
+.spreadsheet-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.spreadsheet-panel-header > div { flex: 1; min-width: 0; }
+.spreadsheet-panel-header h2 { margin: 0; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.spreadsheet-panel-header p { margin: 2px 0 0; color: var(--ink-3); font-family: var(--mono); font-size: 12px; }
+.spreadsheet-panel-mark { display: grid; place-items: center; color: var(--wine); }
+.spreadsheet-toolbar { display: flex; align-items: center; gap: 4px; min-height: 46px; padding: 6px 10px; overflow-x: auto; background: var(--surface); border-bottom: 1px solid var(--rule); }
+.spreadsheet-toolbar .btn { flex: 0 0 auto; }
+.spreadsheet-toolbar-separator { flex: 0 0 1px; width: 1px; height: 22px; margin: 0 4px; background: var(--rule); }
+.spreadsheet-search { display: flex; align-items: center; gap: 5px; min-width: 130px; height: 30px; margin-left: auto; padding: 0 7px; color: var(--ink-3); background: var(--paper); border: 1px solid var(--rule-strong); border-radius: var(--r-2); }
+.spreadsheet-search input { min-width: 80px; width: 100%; padding: 0; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 12px; }
+.spreadsheet-formula-bar { display: grid; grid-template-columns: 58px minmax(0, 1fr); align-items: center; min-height: 34px; border-bottom: 1px solid var(--rule); }
+.spreadsheet-formula-bar > span { padding: 0 8px; color: var(--wine); text-align: center; border-right: 1px solid var(--rule); font-size: 12px; }
+.spreadsheet-formula-bar input { width: 100%; height: 33px; padding: 0 9px; color: var(--ink); background: var(--paper); border: 0; outline: 0; font-family: var(--mono); font-size: 12px; }
+.spreadsheet-grid { position: relative; flex: 1; min-height: 180px; overflow: auto; background: var(--paper); outline: 0; }
+.spreadsheet-grid:focus-visible { outline: 2px solid var(--wine); outline-offset: -2px; }
+.spreadsheet-canvas { position: relative; }
+.spreadsheet-cell,
+.spreadsheet-column-header,
+.spreadsheet-row-header,
+.spreadsheet-corner { position: absolute; box-sizing: border-box; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.spreadsheet-column-header,
+.spreadsheet-row-header,
+.spreadsheet-corner { z-index: 3; display: grid; place-items: center; color: var(--ink-3); background: var(--surface-2); font-size: 12px; user-select: none; }
+.spreadsheet-row-header { z-index: 2; }
+.spreadsheet-cell { display: flex; align-items: center; z-index: 1; padding: 0 7px; overflow: hidden; color: var(--ink); background: var(--paper); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; user-select: none; }
+.spreadsheet-cell[data-selected] { background: var(--wine-tint); }
+.spreadsheet-cell[data-active] { z-index: 2; border: 2px solid var(--wine); padding: 0 6px; }
+.spreadsheet-cell input { position: absolute; inset: -1px; width: calc(100% + 2px); height: calc(100% + 2px); padding: 0 6px; color: var(--ink); background: var(--paper); border: 2px solid var(--wine); outline: 0; font: inherit; }
+.spreadsheet-tabs { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 6px 10px; background: var(--surface); border-top: 1px solid var(--rule); }
+.spreadsheet-tab-list { display: flex; align-items: center; min-width: 0; overflow-x: auto; }
+.spreadsheet-tab-list button { flex: 0 0 auto; height: 32px; padding: 0 10px; color: var(--ink-3); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: 12px; }
+.spreadsheet-tab-list button[aria-selected="true"] { color: var(--wine); border-bottom-color: var(--wine); }
+.spreadsheet-tab-list .spreadsheet-add-sheet { display: grid; place-items: center; width: 32px; padding: 0; }
+.spreadsheet-use-selection { flex: 0 0 auto; }
+.spreadsheet-state { margin: auto; color: var(--ink-3); font-size: 13px; }
+.spreadsheet-error, .spreadsheet-inline-error { color: var(--danger); }
+.spreadsheet-inline-error { position: absolute; right: 10px; bottom: 54px; max-width: calc(100% - 20px); margin: 0; padding: 7px 9px; background: var(--danger-tint); border-radius: var(--r-2); font-size: 12px; }
 @keyframes artifact-panel-in {
   from { opacity: 0; transform: translateX(12px); }
   to { opacity: 1; transform: none; }
@@ -328,6 +629,30 @@ kbd {
 .artifact-panel-tabs button { height: 38px; padding: 0 10px; color: var(--ink-3); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: 13px; }
 .artifact-panel-tabs button:hover { color: var(--ink); }
 .artifact-panel-tabs button.artifact-tab-active { color: var(--wine); border-bottom-color: var(--wine); }
+/* Edição da fonte. O campo toma a altura disponível: editar num campo de
+   quatro linhas um documento de duzentas é rolar mais do que escrever. */
+.artifact-edicao { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; }
+.artifact-edicao-campo {
+  flex: 1;
+  min-height: 200px;
+  padding: 12px 13px;
+  color: var(--ink);
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  outline: 0;
+  resize: none;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+.artifact-edicao-campo { color: var(--code-ink); }
+.artifact-edicao-campo:focus-visible { border-color: var(--wine); }
+.artifact-edicao-acoes { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.artifact-edicao-aviso { color: var(--ink-3); font-size: 12px; }
+.artifact-edicao-botoes { display: flex; align-items: center; gap: 8px; }
+
 .artifact-panel-content { flex: 1; min-height: 0; padding: 18px; overflow: auto; }
 .artifact-panel-content .markdown-body { max-width: none; }
 .artifact-panel-content .markdown-code-shell { margin: 0; }
@@ -336,6 +661,337 @@ kbd {
 .artifact-truncated { color: var(--ochre); }
 .artifact-panel-empty { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 14px; }
 .artifact-render-source-wrap { display: grid; gap: 10px; }
+/* Prévia de LaTeX: medida de leitura de prosa, como a resposta do assistente
+   (DESIGN.md §3.2). Fórmulas e tabelas usam a coluna inteira — o KaTeX de
+   bloco rola sozinho quando a expressão é larga demais. */
+.latex-preview { max-width: 72ch; }
+.latex-preview .katex-display { overflow-x: auto; overflow-y: hidden; padding-block: 2px; }
+.latex-preview table { width: 100%; }
+
+/* Grupo de despacho: anexar e enviar lado a lado, nesta ordem. Gap menor que
+   o do rodapé (10px) para que os dois leiam como um par, e não como dois
+   controles vizinhos por acaso. */
+.composer-send-group { display: flex; align-items: center; gap: 6px; }
+
+/* Figura dentro do texto (cerca ```mermaid renderizada). */
+.markdown-figura { margin: 18px 0; padding: 0; text-align: center; }
+.markdown-figura img { max-width: 100%; height: auto; }
+
+/* Log de diagnóstico. Rebaixado e fechado: é ferramenta, não leitura. */
+.trace-log { margin-top: 12px; }
+.trace-log summary { color: var(--ink-3); font-size: 12px; cursor: pointer; }
+.trace-log-acoes { margin: 8px 0 6px; }
+.trace-log-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface);
+  border-radius: var(--r-2);
+}
+.trace-log-lista li { display: flex; gap: 8px; font-size: 12px; line-height: 1.5; }
+/* Tempo e escopo alinhados: é o que deixa varrer a coluna com o olho. */
+.trace-log-tempo { flex: none; width: 52px; color: var(--ink-3); text-align: right; }
+.trace-log-escopo { flex: none; width: 68px; color: var(--ink-3); font-family: var(--mono); }
+.trace-log-lista em { display: block; color: var(--ink-3); font-style: normal; }
+/* Falha do provedor é o que se procura num log: fica em vinho. */
+.trace-log-lista li[data-escopo="provedor"] .trace-log-escopo { color: var(--wine); }
+
+/* --- Modo Science ------------------------------------------------------- */
+
+.science-picker { position: relative; }
+/* Ligado é estado, e vinho é como este sistema sinaliza estado. */
+.science-gatilho[data-ativo] { color: var(--wine); }
+.science-painel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  width: 320px;
+  padding: 14px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow);
+}
+.science-titulo { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.science-titulo-secundario { margin-top: 14px; }
+.science-texto { margin: 0 0 10px; color: var(--ink-3); font-size: 12px; line-height: 1.5; }
+.science-opcoes { display: flex; flex-direction: column; gap: 2px; }
+.science-opcao {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 8px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--r-2);
+  cursor: pointer;
+  font: inherit;
+}
+.science-opcao:hover { background: var(--surface); }
+.science-opcao[aria-checked="true"] { background: var(--wine-tint); }
+.science-opcao-topo { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.science-opcao strong { font-size: 13px; font-weight: 600; }
+.science-opcao em { color: var(--ink-3); font-size: 12px; font-style: normal; }
+.science-opcao small { color: var(--ink-3); font-size: 12px; line-height: 1.4; }
+.science-formato { display: flex; gap: 6px; }
+.science-formato-opcao {
+  flex: 1;
+  padding: 7px 10px;
+  color: var(--ink-2);
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.science-formato-opcao[data-escolhido] { color: var(--wine); border-color: var(--wine); background: var(--wine-tint); }
+.science-aviso { margin: 10px 0 0; color: var(--ink-3); font-size: 12px; line-height: 1.4; }
+
+/* Bastidor: rascunho do agente em curso. Rebaixado de propósito — não é a
+   resposta, e confundi-lo com o documento final é pior que não mostrar. */
+.science-bastidor {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+}
+.science-bastidor summary strong { color: var(--ink-2); font-weight: 600; }
+.science-bastidor summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.science-bastidor summary::-webkit-details-marker { display: none; }
+.science-bastidor .status-dot { animation: pulse 1.4s infinite; }
+/* Raciocínio é rebaixado mais um degrau que o rascunho: é o modelo pensando
+   em voz alta, não o texto sendo escrito, e confundir os dois é pior do que
+   não mostrar nenhum. */
+.science-bastidor-corpo[data-raciocinio] { font-style: italic; opacity: 0.8; }
+.science-bastidor-corpo {
+  max-height: 168px;
+  margin-top: 8px;
+  overflow-y: auto;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Progresso da cadeia, dentro da bolha. */
+.science-progresso { display: flex; flex-direction: column; gap: 3px; margin: 0 0 12px; padding: 0; list-style: none; }
+.science-progresso li { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 12px; }
+.science-progresso li .num { color: var(--ink-3); }
+/* O passo corrente se distingue do concluído pela cor, não por um ícone que
+   piscaria a cada troca de estágio. */
+.science-progresso li[data-status="start"] { color: var(--wine); }
+.science-progresso-ok { color: var(--ink-3); }
+
+/* --- Gráfico ------------------------------------------------------------ */
+
+.chart { display: flex; flex-direction: column; gap: 12px; }
+.chart-cabecalho { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.chart-titulo { margin: 0; font-size: 15px; font-weight: 600; }
+.chart-subtitulo { margin: 2px 0 0; color: var(--ink-3); font-size: 12px; }
+.chart-palco { position: relative; }
+.chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* Grade e eixos: hairline sólido, um tom acima da superfície. Tracejado leria
+   como projeção ou limite, e é só grade. */
+.chart-grade { stroke: var(--rule); stroke-width: 1; }
+.chart-tick { fill: var(--ink-3); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chart-eixo-rotulo { fill: var(--ink-3); font-size: 12px; }
+.chart-crosshair { stroke: var(--rule-strong); stroke-width: 1; }
+
+.chart-linha { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+/* Área discreta: a linha carrega o valor; o preenchimento só dá corpo. */
+.chart-area { opacity: 0.14; }
+/* Anel na cor da superfície separa marcadores sobrepostos sem desenhar borda. */
+.chart-marcador { stroke: var(--paper); stroke-width: 2; }
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  transform: translateX(-50%);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.chart-tooltip span { display: flex; align-items: center; gap: 6px; }
+.chart-tooltip i { width: 9px; height: 9px; border-radius: 2px; }
+.chart-tooltip b { margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; }
+
+.chart-legenda { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
+.chart-legenda-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  color: var(--ink-2);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chart-legenda-item[data-estatico] { cursor: default; }
+.chart-legenda-item[data-oculta] { color: var(--ink-3); text-decoration: line-through; }
+.chart-legenda-item[data-oculta] .chart-legenda-marca { opacity: 0.35; }
+.chart-legenda-marca { flex: none; width: 11px; height: 11px; border-radius: 3px; }
+
+.chart-pizza { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
+.chart-svg-pizza { flex: none; width: 240px; height: 240px; }
+.chart-pizza-valor { fill: var(--ink); font-size: 19px; font-weight: 600; }
+.chart-pizza-rotulo { fill: var(--ink-3); font-size: 12px; }
+.chart-legenda-pizza { flex-direction: column; gap: 4px; }
+/* O percentual não é ênfase, é o valor da fatia; `b` está ali pela semântica
+   e a cor secundária já o separa do rótulo. `normal` em vez de 400 porque a
+   escala de pesos do projeto não tem numérico. */
+.chart-legenda-pizza b { margin-left: 6px; color: var(--ink-3); font-weight: normal; }
+
+.chart-tabela { overflow-x: auto; }
+.chart-tabela table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.chart-tabela th, .chart-tabela td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--rule); }
+.chart-tabela thead th { color: var(--ink-3); font-weight: 600; }
+/* Valores à direita com algarismos tabulares: é assim que número se compara
+   na vertical. */
+.chart-tabela td { text-align: right; font-variant-numeric: tabular-nums; }
+.chart-nota { margin: 0; color: var(--ink-3); font-size: 12px; }
+
+/* --- Mapa mental -------------------------------------------------------- */
+
+.mindmap { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 320px; }
+.mindmap-barra { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mindmap-contagem { color: var(--ink-3); font-size: 12px; }
+.mindmap-acoes { display: flex; align-items: center; gap: 6px; }
+/* O palco ancora o cartão de ações, que é posicionado em relação a ele. */
+.mindmap-palco { position: relative; }
+
+/* Cartão de ações do tópico. Some com Escape ou clique no fundo. */
+.mindmap-acoes-no {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 232px;
+  padding: 12px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow);
+}
+.mindmap-acoes-titulo { margin: 0; font-size: 14px; font-weight: 600; }
+.mindmap-acoes-caminho { margin: 0; color: var(--ink-3); font-size: 12px; line-height: 1.4; }
+.mindmap-acoes-no .btn { justify-content: center; width: 100%; }
+
+.mindmap-palco {
+  flex: 1;
+  min-height: 280px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  /* `grab` porque o fundo inteiro é uma superfície que se arrasta. */
+  cursor: grab;
+  touch-action: none;
+}
+.mindmap-palco:active { cursor: grabbing; }
+.mindmap-dica { margin: 0; color: var(--ink-3); font-size: 12px; }
+
+.mindmap-ligacao { fill: none; stroke: var(--rule-strong); stroke-width: 1.5; }
+
+.mindmap-no { cursor: pointer; }
+.mindmap-no rect {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+  transition: fill 0.12s ease, stroke 0.12s ease;
+}
+.mindmap-no text { fill: var(--ink); font-size: 13px; }
+/* A profundidade é dita pelo peso e pela borda, não por cores diferentes: uma
+   paleta por nível vira semáforo e some com a hierarquia (DESIGN.md §3.2). */
+.mindmap-no[data-nivel="0"] rect { fill: var(--surface-2); stroke: var(--ink-2); stroke-width: 1.5; }
+.mindmap-no[data-nivel="0"] text { font-weight: 600; }
+.mindmap-no[data-nivel="1"] rect { stroke: var(--rule-strong); }
+.mindmap-no[data-nivel="2"] rect, .mindmap-no[data-nivel="3"] rect { stroke: var(--rule); }
+.mindmap-no:hover rect { stroke: var(--wine); }
+.mindmap-no:focus-visible { outline: none; }
+.mindmap-no:focus-visible rect { stroke: var(--wine); stroke-width: 2; }
+/* Recolhido é estado, e vinho é como este sistema sinaliza estado. */
+.mindmap-no[data-colapsado] rect { fill: var(--wine-tint); stroke: var(--wine); }
+.mindmap-contador circle { fill: var(--wine); }
+/* `--on-ink` sem literal de reserva: o token existe nos dois temas, e o
+   hexadecimal ali era proibição do DESIGN.md §3.1 disfarçada de fallback.
+   12px é o piso de legibilidade, e o contador é um número que se lê. */
+.mindmap-contador text { fill: var(--on-ink); font-size: 12px; font-weight: 600; }
+
+/* --- Anexos ------------------------------------------------------------- */
+
+.composer[data-arrastando] { border-color: var(--wine); }
+
+.composer-anexos { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }
+.composer-anexo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  font-size: 12px;
+}
+.composer-anexo-thumb { width: 30px; height: 30px; object-fit: cover; border-radius: var(--r-1, 4px); }
+.composer-anexo-icone { display: grid; place-items: center; width: 30px; height: 30px; color: var(--ink-3); }
+.composer-planilha-abrir { padding: 0; background: transparent; border: 0; cursor: pointer; }
+.composer-planilha-abrir:hover { color: var(--wine); }
+.composer-planilha-contexto { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; padding: 7px 9px; color: var(--ink-2); background: var(--wine-tint); border-left: 3px solid var(--wine); border-radius: var(--r-2); font-size: 12px; }
+.composer-planilha-contexto > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-anexo-texto { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.composer-anexo-texto strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.composer-anexo-texto small { color: var(--ink-3); font-size: 12px; }
+.composer-anexo-remover { display: grid; place-items: center; padding: 2px; color: var(--ink-3); background: none; border: 0; cursor: pointer; }
+.composer-anexo-remover:hover { color: var(--danger); }
+.composer-anexo-subindo { color: var(--ink-3); }
+.composer-anexo-erro { margin: 0 0 10px; color: var(--danger); font-size: 12px; }
+
+/* Na bolha, os anexos ficam ACIMA do texto: é a ordem em que o modelo os
+   recebeu, e a pergunta costuma se referir ao que veio antes. */
+.message-anexos { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.message-anexos-imagens { display: flex; flex-wrap: wrap; gap: 6px; }
+.message-anexos-imagens img {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--r-2);
+  /* A imagem é do usuário e não deve encostar na lasca sem separação. */
+  border: 1px solid var(--artifact-rule);
+}
+.message-anexo-doc { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; opacity: 0.85; }
+.message-anexo-doc em { color: var(--artifact-accent); font-style: normal; }
+.message-anexos .spreadsheet-artifact-card { margin: 0; }
+
 .artifact-source { margin: 0; padding: 14px; overflow: auto; color: var(--code-ink); background: var(--code-bg); border-radius: var(--r-2); font-family: var(--mono); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 .artifact-svg-image { display: block; max-width: 100%; max-height: 100%; margin: 0 auto; }
 .artifact-render-warning { margin: 0; padding: 10px 12px; color: var(--ochre); background: var(--surface); border-left: 3px solid var(--ochre); font-size: 13px; }
@@ -914,21 +1570,28 @@ kbd {
 .message-row-user .message-head { justify-content: flex-end; }
 .message-role { color: var(--ink-2); font-weight: 600; }
 .message-head time { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.message-live { display: inline-flex; align-items: center; gap: 6px; color: var(--wine); }
-.message-live .status-dot { animation: pulse 1.4s infinite; }
 
 .message-body { color: var(--ink); font-size: 16px; line-height: 1.65; }
 /* Medida de leitura confortável só para a prosa. Código, tabelas e matemática
    usam a coluna inteira — estreitá-los não ajuda ninguém a ler. */
 .message-body-assistant,
 .message-body-assistant .markdown-body { width: 100%; }
+/* Os mesmos tokens do cartão de artefato, e pela mesma razão: o que o usuário
+   pôs na conversa é objeto, não prosa. A resposta do assistente corre direto
+   sobre o papel; o turno de quem perguntou vira uma lasca encostada à direita
+   — escura sobre papel claro, bege sobre papel escuro, sempre o negativo da
+   página, igual ao artefato.
+   Ler --artifact-* em vez de repetir as cores é o que mantém os dois virando
+   juntos: quando eles saíram do mesmo token, o tema escuro deixou o artefato
+   bege e o balão marrom, e o par se desfez. */
 .message-body-user {
   width: fit-content;
   max-width: min(80%, 620px);
   margin-left: auto;
   padding: 11px 15px;
-  background: var(--surface);
-  border-left: 3px solid var(--wine);
+  color: var(--artifact-ink);
+  background: var(--artifact-bg);
+  border-left: 3px solid var(--artifact-accent);
   border-radius: 0 var(--r-2) var(--r-2) 0;
   font-size: 15px;
 }
@@ -963,6 +1626,82 @@ kbd {
    o alinhamento com o texto que ele acompanha. `flex: none` impede que os
    contêineres flex do botão e do <summary> o comprimam. */
 .agent-orb { display: inline-block; vertical-align: middle; flex: none; }
+
+/* Aba de busca. Reusa provider-field, provider-warning e settings-group; só o
+   que é próprio da tela mora aqui. */
+.search-backend-grid { display: grid; gap: 8px; margin-bottom: 14px; }
+.search-backend {
+  display: grid;
+  gap: 3px;
+  padding: 11px 13px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  cursor: pointer;
+  font: inherit;
+}
+.search-backend:hover { border-color: var(--rule-strong); }
+.search-backend strong { font-size: 14px; font-weight: 600; }
+.search-backend span { color: var(--ink-3); font-size: 12px; }
+.search-backend-active { border-color: var(--wine); }
+.search-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.search-status { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: var(--ink-2); font-size: 13px; }
+.search-sample { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
+.search-sample a { color: var(--ink); }
+
+/* Buscas feitas durante a resposta. Segue a gramática do bloco de raciocínio
+   — mesma superfície, mesmo raio, mesmo chevron — porque são a mesma classe de
+   coisa: um bastidor da resposta, recolhido por padrão. */
+.search-blocks { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; }
+.search-block { background: var(--surface); border-radius: var(--r-2); }
+.search-block-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 12px;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.search-block-head::before {
+  content: '›';
+  order: 3;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+.search-block-head[aria-expanded='true']::before { transform: rotate(90deg); }
+/* Sem fontes não há o que revelar: o chevron sumir evita prometer um gesto
+   que não existe. */
+.search-block-head:disabled { cursor: default; }
+.search-block-head:disabled::before { visibility: hidden; }
+.search-block-icon { flex: none; color: var(--wine); }
+.search-block[data-failed] .search-block-icon { color: var(--ochre); }
+.search-block-query { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-block-count { margin-left: auto; order: 2; color: var(--ink-3); font-size: 12px; }
+.search-block-failure { margin: 0; padding: 0 12px 10px 33px; color: var(--ochre); font-size: 13px; }
+.search-block-results { margin: 0; padding: 0 12px 10px 33px; list-style: none; }
+.search-block-results li { padding-block: 7px; }
+.search-block-results li + li { border-top: 1px solid var(--rule); }
+.search-block-results a { display: block; color: var(--ink); font-size: 14px; }
+.search-block-source { display: block; margin-top: 2px; color: var(--ink-3); font-size: 12px; }
+.search-block-results p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
 
 .reasoning-block {
   margin: 14px 0 0;
@@ -1434,6 +2173,35 @@ kbd {
   line-height: 1.5;
 }
 .provider-form-feedback { margin: 2px 0 0; }
+
+/* Conexão com o OpenCode. Dois cartões lado a lado porque a escolha entre Zen
+   e Go é uma comparação — empilhados, viram uma lista em que o segundo parece
+   secundário, e não é: é outro modelo de cobrança. */
+.opencode-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.opencode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+}
+.opencode-card[data-conectado] { border-color: var(--rule-strong); }
+.opencode-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.opencode-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.opencode-card-title strong { font-size: 14px; font-weight: 600; }
+.opencode-card-title small { color: var(--ink-3); font-size: 12px; }
+/* Vinho é sinalização de estado, não preenchimento (DESIGN.md §3.2). */
+.opencode-card-status { display: inline-flex; align-items: center; gap: 4px; color: var(--wine); font-size: 12px; }
+.opencode-card-text { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+.opencode-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.opencode-card-form { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
 .provider-warning svg { flex: 0 0 auto; margin-top: 1px; }
 
 .provider-empty { margin: 0; color: var(--ink-3); font-size: 13px; }
@@ -1848,6 +2616,9 @@ kbd {
   .chat-app.sidebar-collapsed,
   .chat-app.artifact-panel-open,
   .chat-app.sidebar-collapsed.artifact-panel-open { grid-template-columns: 1fr; transition: none; }
+  /* No celular o painel cobre a tela inteira: não há divisa para arrastar, e
+     o alvo ficaria sobre o conteúdo, roubando o toque de quem só quer rolar. */
+  .artifact-resizer { display: none; }
   .chat-app.sidebar-collapsed .conversation-sidebar {
     width: min(300px, 86vw);
     padding: 16px 12px 12px;
@@ -1894,7 +2665,8 @@ kbd {
   .settings-tab { flex: 0 0 auto; min-width: 132px; }
   .settings-content { padding: 22px 20px 28px; }
   .settings-footer { padding: 14px 20px; }
-  .artifact-panel {
+  .artifact-panel,
+  .spreadsheet-panel {
     position: fixed;
     inset: 0;
     z-index: 40;
@@ -1911,6 +2683,7 @@ kbd {
   }
   .artifact-panel-header { padding: 14px 16px; }
   .artifact-panel-content { padding: 16px; }
+  .spreadsheet-toolbar { padding-inline: 8px; }
 }
 
 @media (max-width: 640px) {
@@ -1937,8 +2710,6 @@ kbd {
   .settings-content { padding: 20px 16px 24px; }
   .settings-footer { padding: 12px 16px; }
   .settings-footer .btn { padding-inline: 8px; }
-  .artifact-card { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .artifact-card-metrics { grid-column: 2 / -1; }
   .artifact-panel-footer { padding-inline: 16px; }
 }
 

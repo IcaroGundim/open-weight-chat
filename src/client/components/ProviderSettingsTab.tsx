@@ -3,6 +3,8 @@ import { KeyRound, Pencil, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-r
 import { deleteProviderSettings, discoverProviderModels, getProviderSettings, saveProviderSettings } from '../api';
 import { useChatStore } from '../store/chat';
 import { AgentOrb } from './AgentOrb';
+import { OpenCodeConnect } from './OpenCodeConnect';
+import type { OpenCodePreset } from '../../shared/opencode';
 import type { ProviderSettings, SecretStorageStatus } from '../types';
 
 interface Draft {
@@ -100,6 +102,37 @@ export function ProviderSettingsTab() {
       setError(reasonMessage(reason, 'Não foi possível atualizar os modelos do provedor.'));
     } finally {
       setDiscoveringId(null);
+    }
+  };
+
+  /**
+   * Conecta um plano do OpenCode.
+   *
+   * Passa pelo MESMO salvar-e-descobrir do cadastro manual de propósito: é a
+   * busca de modelos que prova que a chave vale. Um "salvo com sucesso" que só
+   * gravou o segredo empurraria a descoberta do erro para a primeira mensagem,
+   * onde ela aparece como falha do chat e não como chave errada.
+   */
+  const connectOpenCode = async (preset: OpenCodePreset, apiKey: string) => {
+    setError(null);
+    setSuccess(null);
+    try {
+      await saveProviderSettings(preset.id, {
+        label: preset.label,
+        baseURL: preset.baseURL,
+        models: [],
+        apiKey,
+      });
+      await discoverProviderModels(preset.id);
+      const refreshed = await refresh();
+      await loadModels();
+      const provider = refreshed?.find((item) => item.id === preset.id);
+      setSuccess(`${preset.label} conectado: ${provider?.models.length ?? 0} modelos disponíveis.`);
+    } catch (reason) {
+      // O cadastro fica salvo mesmo quando a descoberta falha, para o usuário
+      // corrigir só a chave sem redigitar o resto.
+      await refresh();
+      setError(reasonMessage(reason, 'Não foi possível conectar ao OpenCode. Confira a chave e tente de novo.'));
     }
   };
 
@@ -221,6 +254,12 @@ export function ProviderSettingsTab() {
 
       {error && !draft ? <p className="provider-error" role="alert">{error}</p> : null}
       {success && !draft ? <p className="provider-success" role="status">{success}</p> : null}
+
+      <OpenCodeConnect
+        connectedIds={providers.filter((provider) => provider.hasKey).map((provider) => provider.id)}
+        disabled={!secretStorage.available}
+        onConnect={connectOpenCode}
+      />
 
       <div className="settings-group">
         <div className="settings-group-heading">

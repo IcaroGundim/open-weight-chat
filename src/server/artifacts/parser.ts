@@ -2,7 +2,7 @@ import type { ArtifactKind } from '../../shared/types';
 
 export type ArtifactParserEvent =
   | { kind: 'text'; text: string }
-  | { kind: 'artifact_open'; slug: string; type: ArtifactKind; language: string | null; title: string }
+  | { kind: 'artifact_open'; slug: string; type: ArtifactKind | 'spreadsheet'; language: string | null; title: string }
   | { kind: 'artifact_body'; slug: string; text: string }
   | { kind: 'artifact_close'; slug: string; truncated: boolean }
   | { kind: 'artifact_patch'; slug: string; edits: Array<{ find: string; replace: string }> };
@@ -15,13 +15,13 @@ const ARTIFACT_CLOSE = '</artifact>';
 const ESCAPED_ARTIFACT_CLOSE = '<\\/artifact>';
 const UPDATE_CLOSE = '</artifact-update>';
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
-const KINDS = new Set<ArtifactKind>(['markdown', 'code', 'svg', 'mermaid']);
+const KINDS = new Set<ArtifactKind | 'spreadsheet'>(['markdown', 'code', 'svg', 'mermaid', 'mindmap', 'chart', 'spreadsheet']);
 
 type ParserState = 'prose' | 'artifact' | 'patch';
 
 interface ArtifactMetadata {
   slug: string;
-  type: ArtifactKind;
+  type: ArtifactKind | 'spreadsheet';
   language: string | null;
   title: string;
 }
@@ -55,7 +55,7 @@ function parseAttributes(tag: string, expectedName: string): Record<string, stri
 function parseArtifactOpening(tag: string): ArtifactMetadata | null {
   const attributes = parseAttributes(tag, 'artifact');
   if (!attributes || !SLUG_PATTERN.test(attributes.id ?? '')) return null;
-  const type = attributes.type as ArtifactKind;
+  const type = attributes.type as ArtifactKind | 'spreadsheet';
   if (!KINDS.has(type)) return null;
   const title = attributes.title ?? '';
   if (title.length < 1 || title.length > 120) return null;

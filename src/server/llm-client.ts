@@ -7,6 +7,57 @@ import type { ProviderUsageLike } from './cost';
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  /** Data URIs; presentes só quando o usuário anexou imagens. */
+  images?: readonly string[];
+}
+
+/**
+ * Serializa uma mensagem para o corpo da requisição.
+ *
+ * Sem imagem, `content` continua sendo uma string — que é o que todo endpoint
+ * compatível aceita. O formato de partes só aparece quando há imagem, porque
+ * há endpoint que recusa um array de partes mesmo para texto puro, e não vale
+ * arriscar toda mensagem por um formato de que quase nenhuma precisa.
+ */
+function serializeMessage(message: LlmMessage): Record<string, unknown> {
+  if (!message.images || message.images.length === 0) {
+    return { role: message.role, content: message.content };
+  }
+  return {
+    role: message.role,
+    content: [
+      ...(message.content ? [{ type: 'text', text: message.content }] : []),
+      ...message.images.map((url) => ({ type: 'image_url', image_url: { url } })),
+    ],
+  };
+}
+
+/**
+ * O provedor recusou por causa das imagens?
+ *
+ * Mesma disciplina do 400 de raciocínio (ver effort.ts): o catálogo não diz
+ * quais modelos enxergam — o `/models` padrão não informa capacidade — e
+ * bloquear pelo flag erraria fechado, escondendo o recurso justamente no caso
+ * BYOK. Melhor tentar e, se o endpoint reclamar, refazer sem as imagens com
+ * um aviso no texto, para o usuário saber por que a resposta as ignorou.
+ */
+export function isVisionRejection(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  const lowered = body.toLowerCase();
+  return ['image_url', 'image', 'vision', 'multimodal', 'content parts', 'invalid content type']
+    .some((termo) => lowered.includes(termo));
+}
+
+/** Aviso posto no lugar das imagens quando o modelo não as aceita. */
+export const VISION_FALLBACK_NOTE =
+  '[As imagens anexadas não puderam ser enviadas: este modelo não aceita imagens.]';
+
+function withoutImages(messages: readonly LlmMessage[]): LlmMessage[] {
+  return messages.map((message) => {
+    if (!message.images || message.images.length === 0) return message;
+    const aviso = `${message.content}\n\n${VISION_FALLBACK_NOTE}`.trim();
+    return { role: message.role, content: aviso };
+  });
 }
 
 export type LlmStreamEvent =
@@ -37,6 +88,16 @@ export interface LlmStreamOptions {
   connectionTimeoutMs?: number;
   inactivityTimeoutMs?: number;
   maxAttempts?: number;
+  /**
+   * Diagnóstico das tentativas.
+   *
+   * As quedas deste módulo — 400 de raciocínio, 400 de imagem, 429, 5xx — são
+   * silenciosas por desenho: elas existem para a mensagem não falhar. O efeito
+   * colateral é que ninguém consegue explicar por que uma resposta demorou o
+   * dobro ou saiu sem as imagens. Este gancho torna isso legível sem mudar o
+   * comportamento.
+   */
+  onTrace?: (event: string, detail?: string) => void;
 }
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
@@ -236,10 +297,14 @@ async function* readSseEvents(
   }
 }
 
-function requestBody(options: LlmStreamOptions, effort: EffortRequestParams | null): string {
+function requestBody(
+  options: LlmStreamOptions,
+  effort: EffortRequestParams | null,
+  messages: readonly LlmMessage[],
+): string {
   const body: Record<string, unknown> = {
     model: options.modelId,
-    messages: options.messages,
+    messages: messages.map(serializeMessage),
     stream: true,
     stream_options: { include_usage: true },
   };
@@ -271,6 +336,9 @@ export class OpenAICompatibleClient {
     let emittedToken = false;
     // Vira null se o provedor rejeitar estes campos — ver o 400 tratado abaixo.
     let effort = effortRequestParams(options.effort, options.providerId);
+    // Idem para as imagens: se o endpoint recusar, a tentativa seguinte vai
+    // sem elas em vez de a mensagem inteira falhar.
+    let mensagens: readonly LlmMessage[] = options.messages;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (options.signal.aborted) throw options.signal.reason ?? abortError();
@@ -298,7 +366,7 @@ export class OpenAICompatibleClient {
           {
             method: 'POST',
             headers,
-            body: requestBody(options, effort),
+            body: requestBody(options, effort, mensagens),
             signal: combined.signal,
           },
           { fetchImpl },
@@ -325,7 +393,17 @@ export class OpenAICompatibleClient {
         // máximo uma vez — `effort` vira null — e não gasta o orçamento de
         // retentativa de 429/5xx, que existe para outra coisa.
         if (effort && isEffortRejection(response.status, body, effort.keys)) {
+          options.onTrace?.('esforço recusado pelo provedor', `400 · refazendo sem ${effort.keys.join(', ')}`);
           effort = null;
+          attempt -= 1;
+          continue;
+        }
+        // O endpoint reclamou das imagens: refaz sem elas, com o aviso no
+        // texto. Acontece no máximo uma vez e não gasta o orçamento de
+        // retentativa de 429/5xx, que existe para outra coisa.
+        if (mensagens.some((message) => message.images?.length) && isVisionRejection(response.status, body)) {
+          options.onTrace?.('imagens recusadas pelo provedor', '400 · refazendo sem as imagens');
+          mensagens = withoutImages(mensagens);
           attempt -= 1;
           continue;
         }
@@ -334,9 +412,11 @@ export class OpenAICompatibleClient {
         if (!emittedToken && retryable && attempt < maxAttempts) {
           const retryAfter = parseRetryAfter(response);
           const backoff = retryAfter ?? Math.min(2_000, 250 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200));
+          options.onTrace?.('retentativa', `HTTP ${response.status} · esperando ${backoff}ms · tentativa ${attempt + 1}/${maxAttempts}`);
           await sleepWithAbort(backoff, options.signal);
           continue;
         }
+        options.onTrace?.('provedor recusou', `HTTP ${response.status}`);
         throw upstreamError;
       }
       if (!response.body) throw new AppError('UNKNOWN', { message: 'O provedor retornou um stream vazio.' });

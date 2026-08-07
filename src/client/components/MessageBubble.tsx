@@ -1,12 +1,15 @@
-import { memo, useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { Check, Copy, FileText } from 'lucide-react';
 import { Markdown } from '../render/Markdown';
 import { useChatStore } from '../store/chat';
+import { attachmentUrl } from '../api';
 import { AgentOrb } from './AgentOrb';
+import { SearchBlock } from './SearchBlock';
 import { ArtifactCard } from './ArtifactCard';
 import { CostBadge } from './CostBadge';
 import { ReasoningBlock } from './ReasoningBlock';
-import { EMPTY_ARTIFACTS, type ChatMessage } from '../types';
+import { SpreadsheetCard } from './SpreadsheetCard';
+import { EMPTY_ARTIFACTS, type Attachment, type ChatMessage } from '../types';
 
 type MessageBubbleProps = {
   message: ChatMessage;
@@ -25,6 +28,175 @@ function formatDateTime(value?: string | number): string | undefined {
   if (!value) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/**
+ * Anexos da mensagem do usuário.
+ *
+ * Imagem aparece como imagem — é o que ela é, e uma linha "foto.png · 240 KB"
+ * obrigaria a abrir para saber o que foi mandado. Documento aparece como
+ * linha, porque o conteúdo dele já foi para o modelo como texto e reproduzi-lo
+ * aqui repetiria a mensagem inteira.
+ */
+function MessageAttachments({ attachments }: { attachments?: Attachment[] }) {
+  if (!attachments || attachments.length === 0) return null;
+  const imagens = attachments.filter((anexo) => anexo.kind === 'image');
+  const documentos = attachments.filter((anexo) => anexo.kind === 'document');
+  const planilhas = attachments.filter((anexo) => anexo.kind === 'spreadsheet');
+  return (
+    <div className="message-anexos">
+      {imagens.length > 0 ? (
+        <div className="message-anexos-imagens">
+          {imagens.map((anexo) => (
+            <a key={anexo.id} href={attachmentUrl(anexo.id)} target="_blank" rel="noopener noreferrer">
+              <img src={attachmentUrl(anexo.id)} alt={anexo.filename} loading="lazy" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {documentos.map((anexo) => (
+        <span className="message-anexo-doc" key={anexo.id}>
+          <FileText size={14} aria-hidden="true" />
+          <span>{anexo.filename}</span>
+          {anexo.textChars === 0 ? <em>sem texto legível</em> : null}
+          {anexo.truncated ? <em>cortado</em> : null}
+        </span>
+      ))}
+      {planilhas.map((anexo) => (
+        <SpreadsheetCard key={anexo.id} attachment={anexo} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Progresso da cadeia Science.
+ *
+ * Fica guardado NA mensagem, não num estado efêmero: quem reabre a conversa
+ * depois precisa saber por quantas mãos aquele texto passou — é o que explica
+ * o custo e a extensão dele.
+ */
+function ScienceStages({ message }: { message: ChatMessage }) {
+  const estagios = message.scienceStages;
+  if (!estagios || estagios.length === 0) return null;
+  return (
+    <ol className="science-progresso">
+      {estagios.map((estagio) => (
+        <li key={estagio.index} data-status={estagio.status}>
+          <span className="num">{estagio.index}/{estagio.total}</span>
+          {estagio.label}
+          {/* Concluído fica dito: sem isso, um passo que terminou e um que
+              nem começou se parecem. */}
+          {estagio.status === 'done' ? <span className="science-progresso-ok" aria-hidden="true">✓</span> : null}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/**
+ * Bastidor: o texto que o agente em curso está escrevendo.
+ *
+ * Fica visualmente rebaixado — menor, recuado, em tom secundário — porque não
+ * é a resposta. É rascunho de um agente intermediário, e confundi-lo com o
+ * documento final seria pior do que não mostrar nada.
+ *
+ * A rolagem acompanha o fim: um painel de altura fixa que não rola para baixo
+ * mostra sempre o começo do texto, que é justamente a parte que já foi lida.
+ */
+function ScienceDraft({ message }: { message: ChatMessage }) {
+  const draft = message.scienceDraft;
+  const corpoRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const corpo = corpoRef.current;
+    if (corpo) corpo.scrollTop = corpo.scrollHeight;
+  }, [draft?.text, draft?.reasoning]);
+
+  if (!draft) return null;
+  // Enquanto não há texto, o painel mostra o raciocínio: com esforço alto essa
+  // fase leva minutos, e é justamente quando o usuário precisa ver que algo
+  // está acontecendo.
+  const escrevendo = draft.text.trim().length > 0;
+  const conteudo = escrevendo ? draft.text : draft.reasoning;
+  if (!conteudo.trim()) return null;
+  // O nome do agente vem da lista de estágios, pelo índice.
+  //
+  // Sem ele o painel dizia só "Escrevendo", e como CADA agente devolve o
+  // documento inteiro — o aprofundador reescreve tudo com os acréscimos —, a
+  // tela mostrava um texto longo sendo escrito três vezes seguidas, sem nada
+  // indicando que eram autores diferentes. Parecia um laço.
+  const rotulo = message.scienceStages?.find((estagio) => estagio.index === draft.index)?.label;
+  return (
+    <details className="science-bastidor" open>
+      <summary>
+        <span className="status-dot" aria-hidden="true" />
+        {rotulo ? <><strong>{rotulo}</strong> · </> : null}
+        {escrevendo ? 'escrevendo' : 'raciocinando'} — <span className="num">{conteudo.length.toLocaleString('pt-BR')}</span> caracteres
+      </summary>
+      <div className="science-bastidor-corpo" ref={corpoRef} aria-live="off" data-raciocinio={!escrevendo || undefined}>
+        {/* Texto cru de propósito: renderizar Markdown a cada pedaço faria o
+            painel refluir inteiro a cada token. */}
+        {conteudo}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Log de diagnóstico do turno.
+ *
+ * Existe para transformar "bugou" em algo verificável: quantos agentes
+ * rodaram, quanto tempo cada um levou, que retentativa aconteceu por baixo,
+ * por que terminou. O botão de copiar é o ponto — o log só vale se sair
+ * daqui e chegar em quem vai ler.
+ *
+ * Fechado por padrão: é ferramenta de investigação, não parte da leitura.
+ */
+function TraceLog({ message }: { message: ChatMessage }) {
+  const linhas = message.trace;
+  const [copiado, setCopiado] = useState(false);
+  if (!linhas || linhas.length === 0) return null;
+
+  const comoTexto = linhas
+    .map((linha) => `${String(linha.at).padStart(6)}ms  ${linha.scope.padEnd(9)} ${linha.event}${linha.detail ? ` — ${linha.detail}` : ''}`)
+    .join('\n');
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(comoTexto);
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 1400);
+    } catch {
+      setCopiado(false);
+    }
+  };
+
+  return (
+    <details className="trace-log">
+      <summary>
+        Log do turno — <span className="num">{linhas.length}</span> eventos
+      </summary>
+      <div className="trace-log-acoes">
+        <button type="button" className="btn btn-quiet" onClick={() => void copiar()}>
+          {copiado ? <Check size={14} /> : <Copy size={14} />}
+          {copiado ? 'Copiado' : 'Copiar log'}
+        </button>
+      </div>
+      <ol className="trace-log-lista">
+        {linhas.map((linha, indice) => (
+          <li key={`${linha.at}-${indice}`} data-escopo={linha.scope}>
+            <span className="num trace-log-tempo">{(linha.at / 1000).toFixed(1)}s</span>
+            <span className="trace-log-escopo">{linha.scope}</span>
+            <span>
+              {linha.event}
+              {linha.detail ? <em>{linha.detail}</em> : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
 }
 
 function AssistantContent({ message }: { message: ChatMessage }) {
@@ -79,23 +251,42 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
       <div className="message-head">
         <span className="message-role">{isUser ? 'Você' : 'Assistente'}</span>
         {message.createdAt ? <time dateTime={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time> : null}
-        {isStreaming ? (
-          <span className="message-live"><span className="status-dot" aria-hidden="true" />gerando</span>
-        ) : null}
+        {/* Sem selo de "gerando" no cabeçalho: o estado já é dito duas vezes
+            embaixo — pelo orb enquanto não há texto (e é ele que carrega o
+            rótulo lido por leitor de tela) e pelo próprio texto aparecendo
+            depois. Um terceiro anúncio da mesma coisa é ruído. */}
       </div>
 
       <div className={'message-body ' + (isUser ? 'message-body-user' : 'message-body-assistant') + (message.status === 'error' ? ' message-body-error' : '')}>
         {isUser ? (
-          <p className="user-message-text">{message.content}</p>
+          <>
+            <MessageAttachments attachments={message.attachments} />
+            {message.content ? <p className="user-message-text">{message.content}</p> : null}
+          </>
         ) : message.content ? (
-          <AssistantContent message={message} />
+          <>
+            <ScienceStages message={message} />
+            <MessageAttachments attachments={message.attachments} />
+            <AssistantContent message={message} />
+          </>
+        ) : message.attachments?.length ? (
+          <MessageAttachments attachments={message.attachments} />
         ) : isStreaming ? (
-          <AgentOrb activity="pensando" label="Assistente está respondendo" />
+          <>
+            <ScienceStages message={message} />
+            <ScienceDraft message={message} />
+            <AgentOrb activity="pensando" label="Assistente está respondendo" />
+          </>
         ) : null}
+
+        {/* Antes do raciocínio e do texto: a busca é o que ACONTECEU primeiro,
+            e a ordem na tela deve ser a ordem dos fatos. */}
+        {message.searches?.length ? <SearchBlock searches={message.searches} /> : null}
 
         {message.reasoning ? (
           <ReasoningBlock reasoning={message.reasoning} tokens={message.usage?.reasoningTokens} streaming={isStreaming} />
         ) : null}
+        <TraceLog message={message} />
         {message.status === 'error' ? (
           <p className="message-error-text">{message.errorMessage ?? 'Não foi possível concluir esta resposta.'}</p>
         ) : null}

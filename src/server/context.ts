@@ -1,6 +1,16 @@
 export interface ContextMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  /**
+   * Data URIs das imagens anexadas a esta mensagem.
+   *
+   * Campo à parte, e não um `content` que vira união de string e partes: o
+   * conteúdo textual é lido para aparo por contexto, estimativa de token,
+   * montagem de artefatos e busca. Trocar o tipo dele obrigaria todos esses
+   * pontos a tratar um caso que só existe na fronteira com o provedor — e é
+   * exatamente lá, no llm-client, que as partes são montadas.
+   */
+  images?: readonly string[];
 }
 
 export interface TrimmedContext {
@@ -16,8 +26,19 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
+/**
+ * Custo aproximado de uma imagem no contexto.
+ *
+ * O número real depende da resolução e do modelo (de ~85 a mais de 1500).
+ * Este valor é alto de propósito: errar para cima faz o histórico ser aparado
+ * antes do necessário, o que é irritante; errar para baixo estoura a janela e
+ * o provedor recusa a mensagem inteira.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1_200;
+
 export function estimateMessageTokens(message: ContextMessage): number {
-  return estimateTokens(message.content) + 4;
+  const imagens = (message.images?.length ?? 0) * IMAGE_TOKEN_ESTIMATE;
+  return estimateTokens(message.content) + 4 + imagens;
 }
 
 export function estimateContextTokens(messages: readonly ContextMessage[]): number {

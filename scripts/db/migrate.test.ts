@@ -135,15 +135,15 @@ describe('motor de migração', () => {
   it('status em banco vazio: nenhuma migração aplicada', async () => {
     const run = createSqliteRunner(db);
     const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
-    expect(migrations.map((m) => m.version)).toEqual(['001', '002', '003', '004']);
+    expect(migrations.map((m) => m.version)).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']);
     expect(await appliedVersions(run)).toEqual(new Set());
   });
 
-  it('up em banco vazio aplica 001 a 004 e cria o schema multiusuário', async () => {
+  it('up em banco vazio aplica 001 a 010 e cria o schema multiusuário', async () => {
     const run = createSqliteRunner(db);
     const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
     const result = await migrateUp(run, migrations, legacyContext(null));
-    expect(result.applied.map((m) => m.version)).toEqual(['001', '002', '003', '004']);
+    expect(result.applied.map((m) => m.version)).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row: { name: string }) => row.name);
     expect(tables).toContain('users');
@@ -151,6 +151,36 @@ describe('motor de migração', () => {
 
     const conversationColumns = db.prepare('PRAGMA table_info(conversations)').all().map((row: { name: string }) => row.name);
     expect(conversationColumns).toContain('user_id');
+    // Migração 007: o CHECK de artifacts.kind passa a aceitar mindmap, e a
+    // reconstrução da tabela não pode ter levado o índice junto.
+    const artefatos = await run.query<Array<{ sql: string }>>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='artifacts'",
+    );
+    expect(artefatos[0].sql).toContain('mindmap');
+    // 008: gráfico entra no mesmo CHECK.
+    expect(artefatos[0].sql).toContain('chart');
+    const indice = await run.query<Array<{ name: string }>>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_artifacts_conv'",
+    );
+    expect(indice).toHaveLength(1);
+
+    // Tabela de anexos da migração 006.
+    const anexos = await run.query<Array<{ name: string }>>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'",
+    );
+    expect(anexos).toHaveLength(1);
+    const attachmentSql = await run.query<Array<{ sql: string }>>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='attachments'",
+    );
+    expect(attachmentSql[0].sql).toContain('spreadsheet');
+    const spreadsheetVersions = await run.query<Array<{ name: string }>>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='spreadsheet_versions'",
+    );
+    expect(spreadsheetVersions).toHaveLength(1);
+
+    // Tabela de configuração de busca da migração 005.
+    const busca = await run.query<Array<Record<string, unknown>>>('PRAGMA table_info(search_settings)');
+    expect(busca.map((row) => String(row.name))).toContain('backend');
     // Coluna de nível de esforço da migração 004.
     expect(conversationColumns).toContain('effort');
 
@@ -166,7 +196,7 @@ describe('motor de migração', () => {
     const rateTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('rate_limit_counters','rate_limit_streams')").all();
     expect(rateTables).toHaveLength(2);
 
-    expect(await appliedVersions(run)).toEqual(new Set(['001', '002', '003', '004']));
+    expect(await appliedVersions(run)).toEqual(new Set(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']));
   });
 
   it('up é idempotente: segunda execução não quebra nem duplica', async () => {
@@ -177,6 +207,28 @@ describe('motor de migração', () => {
     const second = await migrateUp(run, migrations, legacyContext(null));
     expect(second.applied).toEqual([]);
     expect(await tableCounts(run)).toEqual(before);
+  });
+
+  it('migração 010 preserva anexos existentes e suas chaves estrangeiras', async () => {
+    const run = createSqliteRunner(db);
+    const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
+    await migrateUp(run, migrations.filter((migration) => migration.version !== '010'), legacyContext(null));
+    const now = Date.now();
+    db.prepare('INSERT INTO users (id, created_at, updated_at) VALUES (?, ?, ?)').run('user-sheet', now, now);
+    db.prepare(`INSERT INTO conversations (id,user_id,title,provider_id,model_id,created_at,updated_at,archived)
+      VALUES (?,?,?,?,?,?,?,0)`).run('conv-sheet', 'user-sheet', 'Planilha', 'ollama', 'llama3.2', now, now);
+    db.prepare(`INSERT INTO messages (id,conversation_id,role,content,created_at) VALUES (?,?,?,?,?)`)
+      .run('msg-sheet', 'conv-sheet', 'user', 'arquivo', now);
+    db.prepare(`INSERT INTO attachments
+      (id,user_id,conversation_id,message_id,kind,filename,mime,size_bytes,data_base64,extracted_text,truncated,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run('attachment-old', 'user-sheet', 'conv-sheet', 'msg-sheet', 'document', 'notas.txt', 'text/plain', 5, null, 'texto', 0, now);
+
+    await migrateUp(run, migrations, legacyContext(null));
+    const attachment = db.prepare('SELECT * FROM attachments WHERE id=?').get('attachment-old') as Record<string, unknown>;
+    expect(attachment.extracted_text).toBe('texto');
+    expect(attachment.message_id).toBe('msg-sheet');
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
   it('migra dados legados: atribui ao LEGACY_OWNER e recifra v1 → v2', async () => {
