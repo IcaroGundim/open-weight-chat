@@ -16,3 +16,6 @@ providers.local.json
 .vercel
 .env*
 .originkit/
+
+# Metadado do Finder; aparece em qualquer pasta aberta no macOS.
+.DS_Store
