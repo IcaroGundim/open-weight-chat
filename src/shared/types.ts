@@ -102,6 +102,19 @@ export const CostSchema = z.object({
   usd: z.number().nonnegative().nullable(),
   estimated: z.boolean(),
   pricingAvailable: z.boolean(),
+  /**
+   * O valor veio do provedor, e não da tabela de `providers.config.ts`.
+   *
+   * A distinção importa porque a tabela descreve o preço padrão de um id de
+   * modelo, e há casos em que ele não é o preço cobrado — na OpenRouter, o
+   * endpoint que atende varia (e mais ainda com o roteamento rápido ligado).
+   * Quando o provedor informa quanto custou, esse número ganha: ele não é uma
+   * projeção nossa sobre a chamada, é a chamada.
+   *
+   * `default(false)` porque mensagens gravadas antes deste campo existir
+   * foram todas calculadas pela tabela.
+   */
+  reported: z.boolean().default(false),
 });
 export type Cost = z.infer<typeof CostSchema>;
 
@@ -585,6 +598,17 @@ export const ArtifactEditSchema = z.object({
  * A interface diz isso antes de rodar, porque a diferença entre o nível 1 e o
  * 3 é de duas para cinco chamadas sobre um texto longo.
  */
+/**
+ * Modo de roteamento da OpenRouter — ver `src/server/routing.ts`.
+ *
+ * `auto` é o balanceamento padrão dela, e é o padrão aqui: não envia campo
+ * nenhum. `fast` pede o endpoint de maior vazão (`provider.sort =
+ * "throughput"`), que costuma ser mais caro e cujo preço só se conhece depois
+ * da chamada.
+ */
+export const RoutingModeSchema = z.enum(['auto', 'fast']);
+export type RoutingMode = z.infer<typeof RoutingModeSchema>;
+
 export const ChatRequestSchema = z.object({
   conversationId: z.string().min(1).nullable().optional(),
   content: z.string().trim().min(1, 'A mensagem não pode ficar vazia.').max(200_000),
@@ -593,6 +617,13 @@ export const ChatRequestSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   /** Ausente equivale a `auto`: nenhum parâmetro de raciocínio é enviado. */
   effort: EffortLevelSchema.optional(),
+  /**
+   * Preferência de roteamento, aplicada só quando o provedor efetivo é a
+   * OpenRouter. Vai por requisição e não é gravada na conversa: é uma
+   * preferência sobre velocidade e preço, não sobre o assunto conversado, e
+   * o usuário troca de provedor sem trocar de conversa.
+   */
+  routing: RoutingModeSchema.optional(),
   /**
    * Anexos já enviados, referenciados por id.
    *

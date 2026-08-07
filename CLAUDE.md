@@ -9,7 +9,7 @@ Requer **Node 24.16+** e **pnpm 11**. O `package.json` declara esse engine; o al
 ```bash
 pnpm dev                    # Vite (5173) + servidor tsx watch (8787), em paralelo
 pnpm typecheck              # tsc --noEmit
-pnpm test                   # vitest run — 405 testes (1 ignorado)
+pnpm test                   # vitest run — 478 testes (1 ignorado)
 pnpm build                  # cliente (dist/) + função da Vercel (api/entry.js) + dist/server.js
 pnpm design                 # contraste + auditoria das proibições visuais
 pnpm db:migrate status      # também: up --dry-run | up  (down não é suportado)
@@ -90,6 +90,8 @@ aparo do histórico. Fórmulas são preservadas, não recalculadas. Limites:
 **Zen e Go são dois provedores, não um com dois modos.** Mesma chave (`OPENCODE_API_KEY`), catálogos e **preços diferentes para o mesmo id** — `deepseek-v4-pro` custa 1,74 no Zen e 0,435 no Go por milhão de tokens de entrada. Um provedor só faria o custo mentir conforme o plano em uso.
 
 **O OpenCode não tem OAuth para terceiros.** Não há fluxo de autorização publicado; o acesso programático é por chave de API (o Zed também lê chave, não faz login). `OpenCodeConnect.tsx` faz o que é possível: abre o console na aba certa e valida a chave no ato de colar, buscando o catálogo real. Não invente um fluxo de token aqui.
+
+**A OpenRouter é um balanceador, e o modo rápido troca o preço junto com a rota.** `provider: { sort: 'throughput' }` manda escolher o endpoint de maior vazão — o mesmo que o sufixo `:nitro`. Um id de modelo lá é servido por vários endpoints com preços diferentes: no `llama-3.3-70b-instruct` a saída ia de US$ 0,32 a US$ 2,25 por milhão em 07/08/2026, entre treze endpoints. Não existe acréscimo fixo a prometer na interface. Por isso a funcionalidade tem duas metades e a segunda não é opcional: o custo passa a vir de `usage.cost`, que a OpenRouter informa sempre na última mensagem do stream, e `Cost.reported` marca essa procedência. Sem isso a tabela estática mentiria **sistematicamente para baixo**, porque a rota mais veloz raramente é a mais barata. O campo `provider` é enviado só quando a **baseURL efetiva** é da OpenRouter — id de provedor é livre, como no OpenCode — e o `llm-client` refaz a requisição sem ele diante de um 400, como faz com o esforço. `auto` não envia nada. A preferência vive nas preferências do usuário, não na conversa: ela não muda a resposta, só por onde ela passou.
 
 **Os preços em `providers.config.ts` não são autoritativos.** Foram lidos em 04/08/2026, alguns por busca e não pela documentação oficial. Revalide antes de tratar qualquer número como projeção.
 

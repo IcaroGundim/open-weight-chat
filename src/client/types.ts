@@ -32,6 +32,9 @@ export const EFFORT_HINT: Record<EffortLevel, string> = {
   max: 'O teto que o modelo permitir. Onde não existir, vira Alto.',
 };
 
+/** Espelha RoutingModeSchema de shared/types.ts. */
+export type RoutingMode = 'auto' | 'fast';
+
 export function isEffortLevel(value: unknown): value is EffortLevel {
   return typeof value === 'string' && (EFFORT_LEVELS as string[]).includes(value);
 }
@@ -258,6 +261,8 @@ export interface Usage {
   totalTokens?: number;
   costUsd?: number;
   costEstimated?: boolean;
+  /** O custo foi informado pelo provedor (OpenRouter), não calculado aqui. */
+  costReported?: boolean;
 }
 
 export interface ChatMessage {
@@ -390,6 +395,7 @@ export interface ChatRequest {
   providerId: string;
   modelId: string;
   effort?: EffortLevel;
+  routing?: RoutingMode;
   attachmentIds?: string[];
   spreadsheetSelection?: Omit<SpreadsheetSelection, 'filename'>;
   scienceLevel?: ScienceLevel;

@@ -24,12 +24,18 @@ export const CostBadge = memo(function CostBadge({ costUsd, usage, compact = fal
   if (value === undefined || value === null || !Number.isFinite(value)) return null;
 
   const estimated = usage?.costEstimated ?? false;
+  // Custo informado pelo provedor merece ser dito: na OpenRouter o endpoint que
+  // atende varia por requisição, então este número é a única leitura correta —
+  // a tabela do app descreveria o preço padrão do modelo, não o cobrado.
+  const informado = usage?.costReported ?? false;
+  const procedencia = informado ? ' · informado pela OpenRouter' : estimated ? ' · valor estimado' : '';
   const title = usage
-    ? (usage.promptTokens ?? 0) + ' tokens de entrada · ' + (usage.completionTokens ?? 0) + ' tokens de saída'
-      + (estimated ? ' · valor estimado' : '')
-    : estimated
-      ? 'Custo estimado'
-      : 'Custo desta resposta';
+    ? (usage.promptTokens ?? 0) + ' tokens de entrada · ' + (usage.completionTokens ?? 0) + ' tokens de saída' + procedencia
+    : informado
+      ? 'Custo informado pelo provedor'
+      : estimated
+        ? 'Custo estimado'
+        : 'Custo desta resposta';
 
   return (
     <span

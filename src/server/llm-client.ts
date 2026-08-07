@@ -1,7 +1,8 @@
 import { AppError, UpstreamHttpError, isAbortError, normalizeError } from './errors';
 import { safeFetchWithRedirects } from './ssrf';
 import { type EffortRequestParams, effortRequestParams, isEffortRejection } from './effort';
-import type { EffortLevel, ProviderId } from '../shared/types';
+import { type RoutingRequestParams, routingRequestParams } from './routing';
+import type { EffortLevel, ProviderId, RoutingMode } from '../shared/types';
 import type { ProviderUsageLike } from './cost';
 
 export interface LlmMessage {
@@ -84,6 +85,12 @@ export interface LlmStreamOptions {
   temperature?: number;
   /** Nível de raciocínio pedido. `auto`/ausente não envia parâmetro nenhum. */
   effort?: EffortLevel;
+  /**
+   * Preferência de roteamento. Só vira campo quando a baseURL é da OpenRouter
+   * — ver `routing.ts`. Em qualquer outro endpoint é ignorada em silêncio, e
+   * é esse silêncio que impede um 400 num provedor que não conhece `provider`.
+   */
+  routing?: RoutingMode;
   fetchImpl?: typeof fetch;
   connectionTimeoutMs?: number;
   inactivityTimeoutMs?: number;
@@ -300,6 +307,7 @@ async function* readSseEvents(
 function requestBody(
   options: LlmStreamOptions,
   effort: EffortRequestParams | null,
+  routing: RoutingRequestParams | null,
   messages: readonly LlmMessage[],
 ): string {
   const body: Record<string, unknown> = {
@@ -310,6 +318,7 @@ function requestBody(
   };
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (effort) Object.assign(body, effort.body);
+  if (routing) Object.assign(body, routing.body);
   return JSON.stringify(body);
 }
 
@@ -336,6 +345,10 @@ export class OpenAICompatibleClient {
     let emittedToken = false;
     // Vira null se o provedor rejeitar estes campos — ver o 400 tratado abaixo.
     let effort = effortRequestParams(options.effort, options.providerId);
+    // Mesma degradação do esforço, e pelo mesmo motivo: um campo de roteamento
+    // recusado não pode derrubar a mensagem. Perder a velocidade é aceitável;
+    // perder a resposta não é.
+    let routing = routingRequestParams(options.routing ?? 'auto', options.baseURL);
     // Idem para as imagens: se o endpoint recusar, a tentativa seguinte vai
     // sem elas em vez de a mensagem inteira falhar.
     let mensagens: readonly LlmMessage[] = options.messages;
@@ -366,7 +379,7 @@ export class OpenAICompatibleClient {
           {
             method: 'POST',
             headers,
-            body: requestBody(options, effort, mensagens),
+            body: requestBody(options, effort, routing, mensagens),
             signal: combined.signal,
           },
           { fetchImpl },
@@ -392,6 +405,12 @@ export class OpenAICompatibleClient {
         // causa de uma preferência que este endpoint não conhece. Acontece no
         // máximo uma vez — `effort` vira null — e não gasta o orçamento de
         // retentativa de 429/5xx, que existe para outra coisa.
+        if (routing && isEffortRejection(response.status, body, routing.keys)) {
+          options.onTrace?.('roteamento recusado pelo provedor', `400 · refazendo sem ${routing.keys.join(', ')}`);
+          routing = null;
+          attempt -= 1;
+          continue;
+        }
         if (effort && isEffortRejection(response.status, body, effort.keys)) {
           options.onTrace?.('esforço recusado pelo provedor', `400 · refazendo sem ${effort.keys.join(', ')}`);
           effort = null;

@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 import { isEffortLevel } from '../types';
-import type { DensityMode, EffortLevel, ThemeMode } from '../types';
+import type { DensityMode, EffortLevel, RoutingMode, ThemeMode } from '../types';
 
 const THEME_STORAGE_KEY = 'open-weight-chat.theme';
 const DENSITY_STORAGE_KEY = 'open-weight-chat.density';
 const MOTION_STORAGE_KEY = 'open-weight-chat.reduce-motion';
 const EFFORT_STORAGE_KEY = 'open-weight-chat.default-effort';
 const ARTIFACT_WIDTH_STORAGE_KEY = 'open-weight-chat.artifact-width';
+const ROUTING_STORAGE_KEY = 'open-weight-chat.routing';
 
 /**
  * Largura do painel de artefato, em porcentagem da janela.
@@ -23,6 +24,20 @@ export const ARTIFACT_WIDTH_DEFAULT = 42;
 export function clampArtifactWidth(value: number): number {
   if (!Number.isFinite(value)) return ARTIFACT_WIDTH_DEFAULT;
   return Math.min(ARTIFACT_WIDTH_MAX, Math.max(ARTIFACT_WIDTH_MIN, Math.round(value * 10) / 10));
+}
+
+/**
+ * Roteamento vive nas preferências, e não na conversa como o esforço.
+ *
+ * São coisas de natureza diferente: esforço muda a resposta e por isso pertence
+ * ao histórico — ler uma conversa antiga sem saber com quanto raciocínio ela
+ * foi feita atrapalha. Roteamento não muda a resposta, muda por qual endpoint
+ * da OpenRouter ela passou; é preferência de quem está usando, e segue a
+ * pessoa entre conversas em vez de ficar presa a uma.
+ */
+function initialRouting(): RoutingMode {
+  if (typeof window === 'undefined') return 'auto';
+  return window.localStorage.getItem(ROUTING_STORAGE_KEY) === 'fast' ? 'fast' : 'auto';
 }
 
 function initialTheme(): ThemeMode {
@@ -63,11 +78,13 @@ interface SettingsState {
   density: DensityMode;
   reduceMotion: boolean;
   defaultEffort: EffortLevel;
+  routing: RoutingMode;
   artifactWidth: number;
   setTheme: (theme: ThemeMode) => void;
   setDensity: (density: DensityMode) => void;
   setReduceMotion: (reduceMotion: boolean) => void;
   setDefaultEffort: (effort: EffortLevel) => void;
+  setRouting: (routing: RoutingMode) => void;
   setArtifactWidth: (percent: number) => void;
   toggleTheme: () => void;
   resetPreferences: () => void;
@@ -78,6 +95,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   density: initialDensity(),
   reduceMotion: initialReduceMotion(),
   defaultEffort: initialDefaultEffort(),
+  routing: initialRouting(),
   artifactWidth: initialArtifactWidth(),
   setTheme: (theme) => {
     if (typeof window !== 'undefined') window.localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -94,6 +112,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setDefaultEffort: (defaultEffort) => {
     if (typeof window !== 'undefined') window.localStorage.setItem(EFFORT_STORAGE_KEY, defaultEffort);
     set({ defaultEffort });
+  },
+  setRouting: (routing) => {
+    if (typeof window !== 'undefined') window.localStorage.setItem(ROUTING_STORAGE_KEY, routing);
+    set({ routing });
   },
   toggleTheme: () => {
     const theme = get().theme === 'dark' ? 'light' : 'dark';
@@ -112,7 +134,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       window.localStorage.removeItem(MOTION_STORAGE_KEY);
       window.localStorage.removeItem(EFFORT_STORAGE_KEY);
       window.localStorage.removeItem(ARTIFACT_WIDTH_STORAGE_KEY);
+      window.localStorage.removeItem(ROUTING_STORAGE_KEY);
     }
-    set({ theme: 'light', density: 'comfortable', reduceMotion: false, defaultEffort: 'auto', artifactWidth: ARTIFACT_WIDTH_DEFAULT });
+    set({ theme: 'light', density: 'comfortable', reduceMotion: false, defaultEffort: 'auto', routing: 'auto', artifactWidth: ARTIFACT_WIDTH_DEFAULT });
   },
 }));

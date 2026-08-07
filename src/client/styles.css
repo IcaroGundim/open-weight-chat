@@ -716,6 +716,11 @@ body[data-redimensionando] .artifact-resizer-alca { opacity: 1; background: var(
 .tikz-figura figcaption { margin-top: 8px; color: var(--ink-3); font-size: 12px; }
 .tikz-aviso { margin: 6px 0 0; color: var(--ink-3); font-size: 12px; }
 
+/* Modo rápido da OpenRouter. Ligado usa o mesmo vinho do resto da interface
+   para "ativo"; não ganha cor própria porque não é um estado de exceção. */
+.routing-toggle[data-ativo] { color: var(--wine); }
+.routing-toggle[data-ativo] svg { fill: var(--wine); }
+
 /* Velocímetro de tokens por segundo. */
 .velocimetro { display: inline-flex; align-items: center; gap: 6px; }
 .velocimetro-trilho { fill: none; stroke: var(--rule); stroke-width: 3; stroke-linecap: round; }

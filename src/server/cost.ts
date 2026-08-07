@@ -60,6 +60,11 @@ const CAMPOS_SOMAVEIS = [
   'reasoning_tokens',
   'cached_tokens',
   'total_tokens',
+  // O custo informado pela OpenRouter entra na soma pela mesma razão dos
+  // tokens: cada round é uma cobrança. E pela mesma regra do "tudo ou nada" —
+  // um round sem custo informado derruba o campo inteiro para a tabela, que é
+  // aproximada mas não omite metade da conta.
+  'cost',
 ] as const;
 
 export function sumProviderUsage(rounds: readonly (ProviderUsageLike | null)[]): ProviderUsageLike | null {
@@ -84,6 +89,28 @@ export function sumProviderUsage(rounds: readonly (ProviderUsageLike | null)[]):
     if (completo) soma[campo] = total;
   }
   return Object.keys(soma).length > 0 ? soma : null;
+}
+
+/**
+ * Custo em dólares informado pelo próprio provedor, se houver.
+ *
+ * Hoje só a OpenRouter informa: ela devolve `usage.cost` (créditos, e um
+ * crédito é um dólar) na última mensagem do stream, sempre — o
+ * `usage: { include: true }` que a documentação antiga pedia foi descontinuado
+ * e não tem efeito. O número é o preço do endpoint que de fato atendeu, que na
+ * OpenRouter varia por requisição: no `llama-3.3-70b-instruct` os treze
+ * endpoints iam de US$ 0,32 a US$ 2,25 por milhão de tokens de saída. Nenhuma
+ * tabela estática acerta isso, e com o modo rápido ligado o erro é sistemático
+ * para baixo — a rota mais veloz raramente é a mais barata.
+ *
+ * Zero é aceito de propósito, e é a única entrada de custo zero legítima do
+ * sistema: um modelo gratuito da OpenRouter custa zero de verdade, dito pelo
+ * provedor. O que a invariante proíbe é *inventar* zero na ausência de dado —
+ * e a ausência aqui continua devolvendo `undefined`.
+ */
+export function reportedCostUsd(raw: ProviderUsageLike | null | undefined): number | undefined {
+  if (!raw) return undefined;
+  return nestedNumber(raw, [['cost'], ['costUsd'], ['cost_details', 'upstream_inference_cost']]);
 }
 
 export function normalizeUsage(input: UsageInput): Usage {
@@ -121,11 +148,16 @@ export function normalizeUsage(input: UsageInput): Usage {
   };
 }
 
-export function calculateCost(model: ProviderModelConfig, usage: Usage): Cost {
+export function calculateCost(model: ProviderModelConfig, usage: Usage, reported?: number): Cost {
+  // O que o provedor cobrou vence o que a tabela projeta: é medida contra
+  // estimativa, e este projeto já trata as duas como coisas diferentes.
+  if (reported !== undefined) {
+    return { usd: Number(reported.toFixed(8)), estimated: false, pricingAvailable: true, reported: true };
+  }
   const { pricing } = model;
   const pricingAvailable = pricing.inputPerMillion !== null && pricing.outputPerMillion !== null;
   if (!pricingAvailable) {
-    return { usd: null, estimated: true, pricingAvailable: false };
+    return { usd: null, estimated: true, pricingAvailable: false, reported: false };
   }
 
   const promptTokens = Math.max(0, usage.promptTokens);
@@ -141,11 +173,12 @@ export function calculateCost(model: ProviderModelConfig, usage: Usage): Cost {
     usd: Number(usd.toFixed(8)),
     estimated: usage.estimated,
     pricingAvailable: true,
+    reported: false,
   };
 }
 
 export function calculateUsageAndCost(model: ProviderModelConfig, input: UsageInput): CostCalculation {
   const usage = normalizeUsage(input);
-  return { usage, cost: calculateCost(model, usage) };
+  return { usage, cost: calculateCost(model, usage, reportedCostUsd(input.raw)) };
 }
 

@@ -114,7 +114,11 @@ function usage(row: Row): Usage | null {
 
 function cost(row: Row, value: Usage | null): Cost | null {
   if (row.cost_usd == null && !value) return null;
-  return { usd: nullableNumber(row.cost_usd), estimated: bool(row.cost_estimated), pricingAvailable: row.cost_usd != null };
+  // `reported` não é gravado: não há coluna para ele, e o que muda uma decisão
+  // — o número não ser projeção nossa — já viaja em `cost_estimated = false`.
+  // Ao recarregar a conversa, o custo continua exato; some só a etiqueta que
+  // diz de onde ele veio.
+  return { usd: nullableNumber(row.cost_usd), estimated: bool(row.cost_estimated), pricingAvailable: row.cost_usd != null, reported: false };
 }
 
 function message(row: Row): Message {

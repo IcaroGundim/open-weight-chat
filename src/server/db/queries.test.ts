@@ -30,7 +30,7 @@ describe('ChatDatabase', () => {
         content: 'resposta',
         providerId: 'ollama',
         modelId: 'llama3.2',
-        cost: { usd: 0.0012, estimated: false, pricingAvailable: true },
+        cost: { usd: 0.0012, estimated: false, pricingAvailable: true, reported: false },
       });
       expect(database.getCostAnalytics(USER_A, 30).byModel[0]?.modelId).toBe('llama3.2');
       expect(database.getCostAnalytics(USER_A, 30).totalCostUsd).toBeCloseTo(0.0012);
@@ -70,7 +70,7 @@ describe('ChatDatabase', () => {
         content: 'termo-secreto-de-a',
         providerId: 'ollama',
         modelId: 'llama3.2',
-        cost: { usd: 5, estimated: false, pricingAvailable: true },
+        cost: { usd: 5, estimated: false, pricingAvailable: true, reported: false },
       });
       database.upsertProviderSettings(USER_A, {
         id: 'openrouter',

@@ -1555,6 +1555,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                     messages: entrada,
                     temperature: request.temperature,
                     effort: conversation.effort,
+                    routing: request.routing,
                     signal: upstreamController.signal,
                     fetchImpl: options.fetchImpl,
                     onTrace: (evento, detalhe) => { void trace(stream, 'provedor', `agente ${posicao + 1}: ${evento}`, detalhe); },
@@ -1704,6 +1705,9 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                   temperature: request.temperature,
                   // Já sincronizado acima: a conversa é a fonte da verdade.
                   effort: conversation.effort,
+                  // Vem na requisição, não da conversa: é preferência sobre
+                  // velocidade e preço, não sobre o assunto conversado.
+                  routing: request.routing,
                   signal: upstreamController.signal,
                   fetchImpl: options.fetchImpl,
                   onTrace: (evento, detalhe) => { void trace(stream, 'provedor', evento, detalhe); },

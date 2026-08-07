@@ -417,10 +417,15 @@ function usageFromRow(row: UnknownRow): Usage | null {
 function costFromRow(row: UnknownRow, usage: Usage | null): Cost | null {
   const hasCost = row.cost_usd !== null && row.cost_usd !== undefined;
   if (!hasCost && !usage) return null;
+  // `reported` não é gravado: não há coluna para ele, e o que muda uma decisão
+  // — o número não ser projeção nossa — já viaja em `cost_estimated = false`.
+  // Ao recarregar a conversa, o custo continua exato; some só a etiqueta que
+  // diz de onde ele veio.
   return {
     usd: hasCost ? asNumber(row.cost_usd) : null,
     estimated: asBoolean(row.cost_estimated),
     pricingAvailable: hasCost,
+    reported: false,
   };
 }
 

@@ -637,6 +637,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           providerId: selected.providerId,
           modelId: selected.id,
           effort: get().conversations.find((conversation) => conversation.id === conversationId)?.effort ?? 'auto',
+          // Preferência do usuário, não da conversa. O servidor ignora quando
+          // o provedor efetivo não é a OpenRouter.
+          routing: useSettingsStore.getState().routing,
           ...(attachments.length > 0 ? { attachmentIds: attachments.map((anexo) => anexo.id) } : {}),
           ...(spreadsheetSelection ? {
             spreadsheetSelection: {

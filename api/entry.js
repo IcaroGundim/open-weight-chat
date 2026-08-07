@@ -64,7 +64,20 @@ var UsageSchema = z.object({
 var CostSchema = z.object({
   usd: z.number().nonnegative().nullable(),
   estimated: z.boolean(),
-  pricingAvailable: z.boolean()
+  pricingAvailable: z.boolean(),
+  /**
+   * O valor veio do provedor, e não da tabela de `providers.config.ts`.
+   *
+   * A distinção importa porque a tabela descreve o preço padrão de um id de
+   * modelo, e há casos em que ele não é o preço cobrado — na OpenRouter, o
+   * endpoint que atende varia (e mais ainda com o roteamento rápido ligado).
+   * Quando o provedor informa quanto custou, esse número ganha: ele não é uma
+   * projeção nossa sobre a chamada, é a chamada.
+   *
+   * `default(false)` porque mensagens gravadas antes deste campo existir
+   * foram todas calculadas pela tabela.
+   */
+  reported: z.boolean().default(false)
 });
 var ApiErrorSchema = z.object({
   code: ErrorCodeSchema,
@@ -390,6 +403,7 @@ var AttachmentSchema = z.object({
 var ArtifactEditSchema = z.object({
   content: z.string().max(512 * 1024)
 });
+var RoutingModeSchema = z.enum(["auto", "fast"]);
 var ChatRequestSchema = z.object({
   conversationId: z.string().min(1).nullable().optional(),
   content: z.string().trim().min(1, "A mensagem n\xE3o pode ficar vazia.").max(2e5),
@@ -398,6 +412,13 @@ var ChatRequestSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   /** Ausente equivale a `auto`: nenhum parâmetro de raciocínio é enviado. */
   effort: EffortLevelSchema.optional(),
+  /**
+   * Preferência de roteamento, aplicada só quando o provedor efetivo é a
+   * OpenRouter. Vai por requisição e não é gravada na conversa: é uma
+   * preferência sobre velocidade e preço, não sobre o assunto conversado, e
+   * o usuário troca de provedor sem trocar de conversa.
+   */
+  routing: RoutingModeSchema.optional(),
   /**
    * Anexos já enviados, referenciados por id.
    *
@@ -1314,7 +1335,12 @@ var CAMPOS_SOMAVEIS = [
   "completion_tokens",
   "reasoning_tokens",
   "cached_tokens",
-  "total_tokens"
+  "total_tokens",
+  // O custo informado pela OpenRouter entra na soma pela mesma razão dos
+  // tokens: cada round é uma cobrança. E pela mesma regra do "tudo ou nada" —
+  // um round sem custo informado derruba o campo inteiro para a tabela, que é
+  // aproximada mas não omite metade da conta.
+  "cost"
 ];
 function sumProviderUsage(rounds) {
   const informados = rounds.filter((round) => Boolean(round));
@@ -1335,6 +1361,10 @@ function sumProviderUsage(rounds) {
     if (completo) soma[campo] = total;
   }
   return Object.keys(soma).length > 0 ? soma : null;
+}
+function reportedCostUsd(raw) {
+  if (!raw) return void 0;
+  return nestedNumber(raw, [["cost"], ["costUsd"], ["cost_details", "upstream_inference_cost"]]);
 }
 function normalizeUsage(input) {
   const raw = input.raw ?? {};
@@ -1367,11 +1397,14 @@ function normalizeUsage(input) {
     estimated: rawPrompt === void 0 || rawCompletion === void 0
   };
 }
-function calculateCost(model, usage2) {
+function calculateCost(model, usage2, reported) {
+  if (reported !== void 0) {
+    return { usd: Number(reported.toFixed(8)), estimated: false, pricingAvailable: true, reported: true };
+  }
   const { pricing } = model;
   const pricingAvailable = pricing.inputPerMillion !== null && pricing.outputPerMillion !== null;
   if (!pricingAvailable) {
-    return { usd: null, estimated: true, pricingAvailable: false };
+    return { usd: null, estimated: true, pricingAvailable: false, reported: false };
   }
   const promptTokens = Math.max(0, usage2.promptTokens);
   const cachedTokens = Math.min(Math.max(0, usage2.cachedTokens), promptTokens);
@@ -1381,12 +1414,13 @@ function calculateCost(model, usage2) {
   return {
     usd: Number(usd.toFixed(8)),
     estimated: usage2.estimated,
-    pricingAvailable: true
+    pricingAvailable: true,
+    reported: false
   };
 }
 function calculateUsageAndCost(model, input) {
   const usage2 = normalizeUsage(input);
-  return { usage: usage2, cost: calculateCost(model, usage2) };
+  return { usage: usage2, cost: calculateCost(model, usage2, reportedCostUsd(input.raw)) };
 }
 
 // src/server/errors.ts
@@ -1756,6 +1790,24 @@ function isEffortRejection(status, body, keys) {
   return keys.some((key) => lowered.includes(key.toLowerCase()));
 }
 
+// src/server/routing.ts
+function isOpenRouterBaseUrl(baseURL) {
+  let url;
+  try {
+    url = new URL(baseURL);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
+}
+function routingRequestParams(mode, baseURL) {
+  if (mode !== "fast") return null;
+  if (!isOpenRouterBaseUrl(baseURL)) return null;
+  return { body: { provider: { sort: "throughput" } }, keys: ["provider"] };
+}
+
 // src/server/llm-client.ts
 function serializeMessage(message2) {
   if (!message2.images || message2.images.length === 0) {
@@ -1951,7 +2003,7 @@ async function* readSseEvents(body, signal, inactivityTimeoutMs, onInactivityTim
     }
   }
 }
-function requestBody(options, effort, messages) {
+function requestBody(options, effort, routing, messages) {
   const body = {
     model: options.modelId,
     messages: messages.map(serializeMessage),
@@ -1960,6 +2012,7 @@ function requestBody(options, effort, messages) {
   };
   if (options.temperature !== void 0) body.temperature = options.temperature;
   if (effort) Object.assign(body, effort.body);
+  if (routing) Object.assign(body, routing.body);
   return JSON.stringify(body);
 }
 var OpenAICompatibleClient = class {
@@ -1981,6 +2034,7 @@ var OpenAICompatibleClient = class {
     const inactivityTimeoutMs = options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
     let emittedToken = false;
     let effort = effortRequestParams(options.effort, options.providerId);
+    let routing = routingRequestParams(options.routing ?? "auto", options.baseURL);
     let mensagens = options.messages;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (options.signal.aborted) throw options.signal.reason ?? abortError();
@@ -2004,7 +2058,7 @@ var OpenAICompatibleClient = class {
           {
             method: "POST",
             headers,
-            body: requestBody(options, effort, mensagens),
+            body: requestBody(options, effort, routing, mensagens),
             signal: combined.signal
           },
           { fetchImpl }
@@ -2022,6 +2076,12 @@ var OpenAICompatibleClient = class {
       }
       if (!response.ok) {
         const body = await readLimitedText(response);
+        if (routing && isEffortRejection(response.status, body, routing.keys)) {
+          options.onTrace?.("roteamento recusado pelo provedor", `400 \xB7 refazendo sem ${routing.keys.join(", ")}`);
+          routing = null;
+          attempt -= 1;
+          continue;
+        }
         if (effort && isEffortRejection(response.status, body, effort.keys)) {
           options.onTrace?.("esfor\xE7o recusado pelo provedor", `400 \xB7 refazendo sem ${effort.keys.join(", ")}`);
           effort = null;
@@ -2106,7 +2166,7 @@ function usage(row) {
 }
 function cost(row, value) {
   if (row.cost_usd == null && !value) return null;
-  return { usd: nullableNumber(row.cost_usd), estimated: bool(row.cost_estimated), pricingAvailable: row.cost_usd != null };
+  return { usd: nullableNumber(row.cost_usd), estimated: bool(row.cost_estimated), pricingAvailable: row.cost_usd != null, reported: false };
 }
 function message(row) {
   const role = MessageRoleSchema.safeParse(row.role);
@@ -6227,6 +6287,7 @@ ${artifactMarker(parserEvent.slug, version2)}
                       messages: entrada,
                       temperature: request.temperature,
                       effort: conversation.effort,
+                      routing: request.routing,
                       signal: upstreamController.signal,
                       fetchImpl: options.fetchImpl,
                       onTrace: (evento2, detalhe) => {
@@ -6346,6 +6407,9 @@ ${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
                   temperature: request.temperature,
                   // Já sincronizado acima: a conversa é a fonte da verdade.
                   effort: conversation.effort,
+                  // Vem na requisição, não da conversa: é preferência sobre
+                  // velocidade e preço, não sobre o assunto conversado.
+                  routing: request.routing,
                   signal: upstreamController.signal,
                   fetchImpl: options.fetchImpl,
                   onTrace: (evento, detalhe) => {

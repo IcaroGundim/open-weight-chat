@@ -114,6 +114,7 @@ function normalizeUsage(value: unknown): Usage | undefined {
   const totalTokens = asNumber(value.total_tokens ?? value.totalTokens);
   const costUsd = asNumber(value.cost_usd ?? value.costUsd ?? cost?.usd);
   const costEstimated = asBoolean(value.cost_estimated ?? value.costEstimated ?? value.estimated ?? cost?.estimated);
+  const costReported = asBoolean(value.cost_reported ?? value.costReported ?? cost?.reported);
 
   if (
     promptTokens === undefined &&
@@ -135,6 +136,7 @@ function normalizeUsage(value: unknown): Usage | undefined {
     totalTokens,
     costUsd,
     costEstimated,
+    costReported,
   };
 }
 
