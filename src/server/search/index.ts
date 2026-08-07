@@ -9,6 +9,7 @@ import {
   type SearchSettings,
 } from '../../shared/types';
 import { BACKEND_REQUIRES_KEY, BACKEND_REQUIRES_URL, runBackend } from './backends';
+import { isOpenRouterBaseUrl } from '../openrouter';
 
 /**
  * Resolução da busca POR USUÁRIO e DENTRO DA REQUISIÇÃO.
@@ -35,6 +36,17 @@ function aadProviderId(backend: SearchBackend): string {
 
 export interface ResolvedSearch {
   backend: SearchBackend;
+  /**
+   * Quem executa a busca.
+   *
+   * `external` é o protocolo de marcador: o modelo escreve `<search>`, este
+   * servidor consulta o buscador e refaz a chamada com os resultados.
+   * `provider` é a busca nativa do provedor, que acontece dentro do próprio
+   * pedido de chat — não há marcador, não há rounds e não há nada para este
+   * servidor executar. Os dois caminhos são incompatíveis por construção: ligar
+   * os dois faria duas buscas e cobraria as duas.
+   */
+  kind: 'external' | 'provider';
   baseURL: string | null;
   apiKey: string | null;
   maxResults: number;
@@ -77,12 +89,31 @@ export function toSearchSettingsResponse(record: {
  * que o recurso existe. Prometer ao modelo uma ferramenta que vai falhar é
  * pior do que não oferecer.
  */
-export async function resolveSearch(userId: string, db: ChatDatabaseAdapter): Promise<ResolvedSearch | null> {
+export async function resolveSearch(
+  userId: string,
+  db: ChatDatabaseAdapter,
+  /**
+   * BaseURL efetiva do provedor desta requisição.
+   *
+   * Necessária porque a busca nativa não existe fora da OpenRouter: escolhida
+   * ela e selecionado um modelo da DeepSeek, o resultado tem de ser `null` —
+   * e não uma busca que o modelo vai pedir e nunca receber. Ausente, só as
+   * buscas externas são consideradas; é o que serve à tela de configuração,
+   * que não tem provedor nenhum em mãos.
+   */
+  providerBaseURL?: string,
+): Promise<ResolvedSearch | null> {
   const record = await db.getSearchSettings(userId);
   if (!record || !record.enabled) return null;
 
   const backend = SearchBackendSchema.safeParse(record.backend);
   if (!backend.success) return null;
+
+  if (backend.data === 'openrouter') {
+    // Mesma regra do resto: o host decide, nunca o id do provedor.
+    if (!providerBaseURL || !isOpenRouterBaseUrl(providerBaseURL)) return null;
+    return { backend: 'openrouter', kind: 'provider', baseURL: null, apiKey: null, maxResults: record.maxResults };
+  }
 
   const apiKey = record.apiKeyCipher
     ? decryptSecret(record.apiKeyCipher, { userId, providerId: aadProviderId(backend.data) })
@@ -92,6 +123,7 @@ export async function resolveSearch(userId: string, db: ChatDatabaseAdapter): Pr
 
   return {
     backend: backend.data,
+    kind: 'external',
     baseURL: record.baseURL,
     apiKey,
     maxResults: record.maxResults,

@@ -152,7 +152,7 @@ var SseSpreadsheetReadySchema = SseBaseSchema.extend({
     createdAt: z.number()
   })
 });
-var SearchBackendSchema = z.enum(["brave", "tavily", "searxng"]);
+var SearchBackendSchema = z.enum(["brave", "tavily", "searxng", "openrouter"]);
 var SearchResultSchema = z.object({
   title: z.string().min(1).max(300),
   url: z.string().url().max(2048),
@@ -403,7 +403,6 @@ var AttachmentSchema = z.object({
 var ArtifactEditSchema = z.object({
   content: z.string().max(512 * 1024)
 });
-var RoutingModeSchema = z.enum(["auto", "fast"]);
 var ChatRequestSchema = z.object({
   conversationId: z.string().min(1).nullable().optional(),
   content: z.string().trim().min(1, "A mensagem n\xE3o pode ficar vazia.").max(2e5),
@@ -412,13 +411,6 @@ var ChatRequestSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   /** Ausente equivale a `auto`: nenhum parâmetro de raciocínio é enviado. */
   effort: EffortLevelSchema.optional(),
-  /**
-   * Preferência de roteamento, aplicada só quando o provedor efetivo é a
-   * OpenRouter. Vai por requisição e não é gravada na conversa: é uma
-   * preferência sobre velocidade e preço, não sobre o assunto conversado, e
-   * o usuário troca de provedor sem trocar de conversa.
-   */
-  routing: RoutingModeSchema.optional(),
   /**
    * Anexos já enviados, referenciados por id.
    *
@@ -1424,7 +1416,7 @@ function calculateUsageAndCost(model, input) {
   return { usage: usage2, cost: calculateCost(model, usage2, informado) };
 }
 
-// src/server/routing.ts
+// src/server/openrouter.ts
 function isOpenRouterBaseUrl(baseURL) {
   let url;
   try {
@@ -1436,27 +1428,31 @@ function isOpenRouterBaseUrl(baseURL) {
   const host = url.hostname.toLowerCase();
   return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
 }
-function routingRequestParams(mode, baseURL) {
-  if (mode !== "fast") return null;
-  if (!isOpenRouterBaseUrl(baseURL)) return null;
-  return { body: { provider: { sort: "throughput" } }, keys: ["provider"] };
+function webPluginBody(maxResults) {
+  return { plugins: [{ id: "web", max_results: Math.max(1, Math.min(10, maxResults)) }] };
 }
-var VOCABULARIO_DE_CAMPO = [
-  "unknown",
-  "unrecognized",
-  "unsupported",
-  "not supported",
-  "invalid",
-  "unexpected",
-  "not allowed",
-  "additional properties",
-  "extra fields"
-];
-function isRoutingRejection(status, body, keys) {
-  if (status !== 400 || keys.length === 0) return false;
-  const lowered = body.toLowerCase();
-  if (!keys.some((key) => lowered.includes(key.toLowerCase()))) return false;
-  return VOCABULARIO_DE_CAMPO.some((termo) => lowered.includes(termo));
+var MAX_SNIPPET = 400;
+function parseCitations(value) {
+  if (!Array.isArray(value)) return [];
+  const citacoes = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const registro = item;
+    if (registro.type !== "url_citation") continue;
+    const citacao = registro.url_citation;
+    if (!citacao || typeof citacao !== "object") continue;
+    const dados = citacao;
+    const url = typeof dados.url === "string" ? dados.url : "";
+    if (!url) continue;
+    const title = typeof dados.title === "string" && dados.title.trim() ? dados.title.trim() : url;
+    const content = typeof dados.content === "string" ? dados.content : "";
+    citacoes.push({
+      title: title.slice(0, 300),
+      url: url.slice(0, 2048),
+      snippet: content.replace(/\s+/gu, " ").trim().slice(0, MAX_SNIPPET)
+    });
+  }
+  return citacoes;
 }
 
 // src/server/errors.ts
@@ -1933,6 +1929,8 @@ function extractChunkData(payload) {
   const firstChoice = isRecord(choices[0]) ? choices[0] : void 0;
   if (!firstChoice) return { events, hasToken };
   const delta = isRecord(firstChoice.delta) ? firstChoice.delta : firstChoice;
+  const citations = parseCitations(delta.annotations ?? (isRecord(firstChoice.message) ? firstChoice.message.annotations : void 0));
+  if (citations.length > 0) events.push({ kind: "citations", citations });
   const content = textFromContent(delta.content);
   const reasoning = textFromContent(delta.reasoning_content ?? delta.reasoning ?? delta.thinking);
   if (content) {
@@ -2021,7 +2019,7 @@ async function* readSseEvents(body, signal, inactivityTimeoutMs, onInactivityTim
     }
   }
 }
-function requestBody(options, effort, routing, messages) {
+function requestBody(options, effort, messages) {
   const body = {
     model: options.modelId,
     messages: messages.map(serializeMessage),
@@ -2030,7 +2028,9 @@ function requestBody(options, effort, routing, messages) {
   };
   if (options.temperature !== void 0) body.temperature = options.temperature;
   if (effort) Object.assign(body, effort.body);
-  if (routing) Object.assign(body, routing.body);
+  if (options.webSearchResults && isOpenRouterBaseUrl(options.baseURL)) {
+    Object.assign(body, webPluginBody(options.webSearchResults));
+  }
   return JSON.stringify(body);
 }
 var OpenAICompatibleClient = class {
@@ -2052,7 +2052,6 @@ var OpenAICompatibleClient = class {
     const inactivityTimeoutMs = options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
     let emittedToken = false;
     let effort = effortRequestParams(options.effort, options.providerId);
-    let routing = routingRequestParams(options.routing ?? "auto", options.baseURL);
     let mensagens = options.messages;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (options.signal.aborted) throw options.signal.reason ?? abortError();
@@ -2076,7 +2075,7 @@ var OpenAICompatibleClient = class {
           {
             method: "POST",
             headers,
-            body: requestBody(options, effort, routing, mensagens),
+            body: requestBody(options, effort, mensagens),
             signal: combined.signal
           },
           { fetchImpl }
@@ -2094,12 +2093,6 @@ var OpenAICompatibleClient = class {
       }
       if (!response.ok) {
         const body = await readLimitedText(response);
-        if (routing && isRoutingRejection(response.status, body, routing.keys)) {
-          options.onTrace?.("roteamento recusado pelo provedor", `400 \xB7 refazendo sem ${routing.keys.join(", ")}`);
-          routing = null;
-          attempt -= 1;
-          continue;
-        }
         if (effort && isEffortRejection(response.status, body, effort.keys)) {
           options.onTrace?.("esfor\xE7o recusado pelo provedor", `400 \xB7 refazendo sem ${effort.keys.join(", ")}`);
           effort = null;
@@ -4153,15 +4146,23 @@ var BACKENDS = {
 var BACKEND_REQUIRES_KEY = {
   brave: true,
   tavily: true,
-  searxng: false
+  searxng: false,
+  // A chave é a da própria OpenRouter, já configurada em Provedores. Exigir
+  // uma segunda aqui pediria ao usuário algo que ele não tem como fornecer.
+  openrouter: false
 };
 var BACKEND_REQUIRES_URL = {
   brave: false,
   tavily: false,
-  searxng: true
+  searxng: true,
+  openrouter: false
 };
 function runBackend(backend, request) {
-  return BACKENDS[backend](request);
+  const executor = BACKENDS[backend];
+  if (!executor) {
+    throw new Error(`A busca "${backend}" \xE9 resolvida pelo provedor e n\xE3o deve ser executada aqui.`);
+  }
+  return executor(request);
 }
 
 // src/server/search/index.ts
@@ -4183,16 +4184,21 @@ function toSearchSettingsResponse(record) {
     updatedAt: record.updatedAt
   };
 }
-async function resolveSearch(userId, db) {
+async function resolveSearch(userId, db, providerBaseURL) {
   const record = await db.getSearchSettings(userId);
   if (!record || !record.enabled) return null;
   const backend = SearchBackendSchema.safeParse(record.backend);
   if (!backend.success) return null;
+  if (backend.data === "openrouter") {
+    if (!providerBaseURL || !isOpenRouterBaseUrl(providerBaseURL)) return null;
+    return { backend: "openrouter", kind: "provider", baseURL: null, apiKey: null, maxResults: record.maxResults };
+  }
   const apiKey = record.apiKeyCipher ? decryptSecret(record.apiKeyCipher, { userId, providerId: aadProviderId(backend.data) }) : null;
   if (BACKEND_REQUIRES_KEY[backend.data] && !apiKey) return null;
   if (BACKEND_REQUIRES_URL[backend.data] && !record.baseURL) return null;
   return {
     backend: backend.data,
+    kind: "external",
     baseURL: record.baseURL,
     apiKey,
     maxResults: record.maxResults
@@ -5529,6 +5535,13 @@ function createApp(options = {}) {
       await rateLimit.checkChatStart(userId);
       const resolved = await resolveSearch(userId, db);
       if (!resolved) {
+        const settings = await db.getSearchSettings(userId);
+        if (settings?.enabled && settings.backend === "openrouter") {
+          throw new AppError("UNKNOWN", {
+            status: 400,
+            message: "A busca da OpenRouter roda junto da mensagem e n\xE3o tem como ser testada isolada. Ela funciona ao enviar com um modelo da OpenRouter selecionado."
+          });
+        }
         throw new AppError("UNKNOWN", {
           status: 400,
           message: "A busca n\xE3o est\xE1 configurada, est\xE1 desligada ou falta a chave/URL que este buscador exige."
@@ -5901,13 +5914,14 @@ function createApp(options = {}) {
         });
         if (atualizada) conversation = atualizada;
       }
-      const busca = await resolveSearch(userId, db);
+      const busca = await resolveSearch(userId, db, selection.provider.baseURL);
+      const buscaExterna = busca?.kind === "external" ? busca : null;
       const context = requestContext(
         conversation.systemPrompt,
         await db.getMessages(userId, conversation.id),
         await db.getArtifacts(userId, conversation.id),
         selection.model.ctx,
-        busca ? [searchSystemPrompt(MAX_SEARCH_ROUNDS)] : [],
+        buscaExterna ? [searchSystemPrompt(MAX_SEARCH_ROUNDS)] : [],
         anexosPorMensagem,
         request.spreadsheetSelection
       );
@@ -6305,7 +6319,6 @@ ${artifactMarker(parserEvent.slug, version2)}
                       messages: entrada,
                       temperature: request.temperature,
                       effort: conversation.effort,
-                      routing: request.routing,
                       signal: upstreamController.signal,
                       fetchImpl: options.fetchImpl,
                       onTrace: (evento2, detalhe) => {
@@ -6425,9 +6438,9 @@ ${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
                   temperature: request.temperature,
                   // Já sincronizado acima: a conversa é a fonte da verdade.
                   effort: conversation.effort,
-                  // Vem na requisição, não da conversa: é preferência sobre
-                  // velocidade e preço, não sobre o assunto conversado.
-                  routing: request.routing,
+                  // Busca nativa: a OpenRouter busca, injeta e responde na
+                  // mesma requisição. Não há round nem marcador a tratar.
+                  webSearchResults: busca?.kind === "provider" ? busca.maxResults : void 0,
                   signal: upstreamController.signal,
                   fetchImpl: options.fetchImpl,
                   onTrace: (evento, detalhe) => {
@@ -6453,6 +6466,20 @@ ${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
                       });
                     }
                     await persistPartial();
+                  } else if (event.kind === "citations") {
+                    await emit(stream, {
+                      type: "search_end",
+                      query: "busca na web (OpenRouter)",
+                      round: 1,
+                      results: event.citations.map((citacao) => ({
+                        title: citacao.title,
+                        url: citacao.url,
+                        snippet: citacao.snippet
+                      })),
+                      failure: null,
+                      conversationId: conversation.id,
+                      messageId: assistant.id
+                    });
                   } else if (event.kind === "usage") {
                     usoDoRound = event.usage;
                     rawUsage = event.usage;
@@ -6465,7 +6492,7 @@ ${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
                   await consumirScanner(scanner.end());
                   break;
                 }
-                if (!busca || round > MAX_SEARCH_ROUNDS) {
+                if (!buscaExterna || round > MAX_SEARCH_ROUNDS) {
                   const aviso = `
 
 _Limite de ${MAX_SEARCH_ROUNDS} buscas por resposta atingido._
@@ -6481,7 +6508,7 @@ _Limite de ${MAX_SEARCH_ROUNDS} buscas por resposta atingido._
                   conversationId: conversation.id,
                   messageId: assistant.id
                 });
-                const resultado = await runSearch(busca, consultaPedida, upstreamController.signal, options.fetchImpl);
+                const resultado = await runSearch(buscaExterna, consultaPedida, upstreamController.signal, options.fetchImpl);
                 await emit(stream, {
                   type: "search_end",
                   query: consultaPedida,

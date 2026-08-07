@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileSpreadsheet, FileText, Paperclip, Square, X } from 'lucide-react';
 import { EffortPicker } from './EffortPicker';
 import { SciencePicker } from './SciencePicker';
-import { RoutingToggle } from './RoutingToggle';
 import { useSettingsStore } from '../store/settings';
 import { attachmentUrl, deleteAttachment, uploadAttachment } from '../api';
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, type Attachment, type EffortLevel, type ScienceFormat, type ScienceLevel } from '../types';
@@ -52,13 +51,6 @@ export function Composer({
   const openSpreadsheet = useChatStore((state) => state.openSpreadsheet);
   const pendingSelection = useChatStore((state) => state.pendingSpreadsheetSelection);
   const useSpreadsheetSelection = useChatStore((state) => state.useSpreadsheetSelection);
-  // O modo rápido é da OpenRouter: só ela roteia entre endpoints. Vem do
-  // modelo selecionado, não da conversa, porque é o provedor efetivo do
-  // próximo envio que decide se o controle faz sentido.
-  const provedorSelecionado = useChatStore((state) =>
-    state.models.find((model) => model.id === state.selectedModelId)?.providerId);
-  const routing = useSettingsStore((state) => state.routing);
-  const setRouting = useSettingsStore((state) => state.setRouting);
 
   /**
    * Recebe arquivos de qualquer das três portas: botão, colar e arrastar.
@@ -245,9 +237,6 @@ export function Composer({
           />
           <EffortPicker value={effort} onChange={onEffortChange} disabled={isStreaming} />
           <SciencePicker level={scienceLevel} format={scienceFormat} onChange={onScienceChange} disabled={isStreaming} />
-          {provedorSelecionado === 'openrouter' ? (
-            <RoutingToggle value={routing} onChange={setRouting} disabled={isStreaming} />
-          ) : null}
           <span className="composer-hint"><b>Enter</b> envia · <b>Shift + Enter</b> quebra linha</span>
         </div>
         <div className="composer-actions">

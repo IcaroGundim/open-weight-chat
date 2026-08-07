@@ -96,39 +96,6 @@ describe('OpenAI-compatible streaming', () => {
     expect(JSON.parse(bodies[1])).not.toHaveProperty('reasoning_effort');
   });
 
-  it('manda o roteamento rápido só quando a baseURL é da OpenRouter', async () => {
-    const bodies: string[] = [];
-    const client = new OpenAICompatibleClient(async (_input, init) => {
-      bodies.push(String(init?.body));
-      return sseResponse(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', 'data: [DONE]\n\n']);
-    });
-
-    for await (const _ of client.stream(streamOptions({ routing: 'fast', baseURL: 'https://openrouter.ai/api/v1', providerId: 'openrouter' }))) { /* drena */ }
-    expect(JSON.parse(bodies[0]).provider).toEqual({ sort: 'throughput' });
-
-    // O mesmo pedido num endpoint que não conhece `provider` sai sem o campo:
-    // preferir velocidade não vale arriscar 400 na mensagem inteira.
-    for await (const _ of client.stream(streamOptions({ routing: 'fast' }))) { /* drena */ }
-    expect(JSON.parse(bodies[1])).not.toHaveProperty('provider');
-  });
-
-  it('repete sem o campo de roteamento quando o provedor devolve 400 reclamando dele', async () => {
-    const bodies: string[] = [];
-    const client = new OpenAICompatibleClient(async (_input, init) => {
-      bodies.push(String(init?.body));
-      if (bodies.length === 1) {
-        return new Response('{"error":{"message":"provider: unknown field"}}', { status: 400 });
-      }
-      return sseResponse(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', 'data: [DONE]\n\n']);
-    });
-    const events = [];
-    for await (const event of client.stream(streamOptions({ routing: 'fast', baseURL: 'https://openrouter.ai/api/v1', providerId: 'openrouter' }))) {
-      events.push(event);
-    }
-    expect(events).toContainEqual({ kind: 'text', text: 'ok' });
-    expect(JSON.parse(bodies[1])).not.toHaveProperty('provider');
-  });
-
   it('não repete um 400 que nada tem a ver com o esforço', async () => {
     let calls = 0;
     const client = new OpenAICompatibleClient(async () => {
@@ -216,5 +183,41 @@ describe('validação de opções', () => {
       .then(() => null, (caught: unknown) => caught);
     expect(error).toBeInstanceOf(AppError);
     expect((error as AppError).code).toBe('MODEL_NOT_FOUND');
+  });
+});
+
+describe('busca nativa no corpo da requisição', () => {
+  it('manda o plugin só quando a baseURL é da OpenRouter', async () => {
+    const bodies: string[] = [];
+    const client = new OpenAICompatibleClient(async (_i, init) => {
+      bodies.push(String(init?.body));
+      return sseResponse(['data: [DONE]\n\n']);
+    });
+
+    for await (const _ of client.stream(streamOptions({
+      webSearchResults: 5, baseURL: 'https://openrouter.ai/api/v1', providerId: 'openrouter',
+    }))) { /* drena */ }
+    expect(JSON.parse(bodies[0]).plugins).toEqual([{ id: 'web', max_results: 5 }]);
+
+    // O mesmo pedido num endpoint que não conhece `plugins` sai sem o campo.
+    for await (const _ of client.stream(streamOptions({ webSearchResults: 5 }))) { /* drena */ }
+    expect(JSON.parse(bodies[1])).not.toHaveProperty('plugins');
+
+    // Sem busca configurada, o corpo é o de sempre.
+    for await (const _ of client.stream(streamOptions({ baseURL: 'https://openrouter.ai/api/v1', providerId: 'openrouter' }))) { /* drena */ }
+    expect(JSON.parse(bodies[2])).not.toHaveProperty('plugins');
+  });
+
+  it('emite as citações que chegam nas anotações do delta', async () => {
+    const client = new OpenAICompatibleClient(async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"olá"}}]}\n\n',
+      'data: {"choices":[{"delta":{"annotations":[{"type":"url_citation","url_citation":{"url":"https://a.com","title":"A"}}]}}]}\n\n',
+      'data: [DONE]\n\n',
+    ]));
+    const events = [];
+    for await (const event of client.stream(streamOptions({
+      webSearchResults: 3, baseURL: 'https://openrouter.ai/api/v1', providerId: 'openrouter',
+    }))) events.push(event);
+    expect(events).toContainEqual({ kind: 'citations', citations: [{ title: 'A', url: 'https://a.com', snippet: '' }] });
   });
 });

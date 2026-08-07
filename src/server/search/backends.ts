@@ -235,7 +235,8 @@ async function searxng(request: BackendRequest): Promise<SearchResult[]> {
   }
 }
 
-const BACKENDS: Record<SearchBackend, (request: BackendRequest) => Promise<SearchResult[]>> = {
+/** Só os buscadores que ESTE servidor chama. `openrouter` não está aqui. */
+const BACKENDS: Record<Exclude<SearchBackend, 'openrouter'>, (request: BackendRequest) => Promise<SearchResult[]>> = {
   brave,
   tavily,
   searxng,
@@ -246,20 +247,35 @@ export const BACKEND_LABEL: Record<SearchBackend, string> = {
   brave: 'Brave Search',
   tavily: 'Tavily',
   searxng: 'SearXNG (auto-hospedado)',
+  openrouter: 'OpenRouter (nativa, sem chave extra)',
 };
 
 export const BACKEND_REQUIRES_KEY: Record<SearchBackend, boolean> = {
   brave: true,
   tavily: true,
   searxng: false,
+  // A chave é a da própria OpenRouter, já configurada em Provedores. Exigir
+  // uma segunda aqui pediria ao usuário algo que ele não tem como fornecer.
+  openrouter: false,
 };
 
 export const BACKEND_REQUIRES_URL: Record<SearchBackend, boolean> = {
   brave: false,
   tavily: false,
   searxng: true,
+  openrouter: false,
 };
 
+/**
+ * `openrouter` não tem função aqui de propósito: nada neste módulo o executa,
+ * porque não há o que executar — a busca acontece dentro do pedido de chat.
+ * Chamar `runBackend` com ele é um erro de programação, e falhar alto é melhor
+ * do que devolver lista vazia e fazer o modelo responder achando que buscou.
+ */
 export function runBackend(backend: SearchBackend, request: BackendRequest): Promise<SearchResult[]> {
-  return BACKENDS[backend](request);
+  const executor = BACKENDS[backend as Exclude<SearchBackend, 'openrouter'>];
+  if (!executor) {
+    throw new Error(`A busca "${backend}" é resolvida pelo provedor e não deve ser executada aqui.`);
+  }
+  return executor(request);
 }

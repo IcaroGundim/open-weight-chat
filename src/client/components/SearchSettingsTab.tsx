@@ -11,7 +11,23 @@ import type { SearchBackend, SearchResult, SearchSettings, SecretStorageStatus }
  * inventar uma linguagem visual só para ela faria a mesma coisa parecer duas.
  */
 
-const BACKENDS: Array<{ id: SearchBackend; label: string; hint: string; exigeChave: boolean; exigeUrl: boolean }> = [
+const BACKENDS: Array<{
+  id: SearchBackend;
+  label: string;
+  hint: string;
+  exigeChave: boolean;
+  exigeUrl: boolean;
+  /** Roda dentro do pedido de chat, e só com modelos daquele provedor. */
+  nativa?: boolean;
+}> = [
+  {
+    id: 'openrouter',
+    label: 'OpenRouter (nativa)',
+    hint: 'A própria OpenRouter busca e cita, na mesma requisição. Não pede chave de buscador — usa a que você já configurou.',
+    exigeChave: false,
+    exigeUrl: false,
+    nativa: true,
+  },
   {
     id: 'brave',
     label: 'Brave Search',
@@ -176,6 +192,14 @@ export function SearchSettingsTab() {
           ))}
         </div>
 
+        {escolhido.nativa ? (
+          <p className="search-nota-nativa">
+            Vale <strong>só para modelos da OpenRouter</strong>. Com um modelo de outro provedor selecionado, a busca
+            simplesmente não acontece — e o modelo não fica sabendo que ela existe, para não pedir algo que não chega.
+            O custo entra junto do custo da mensagem, que passa a vir da própria OpenRouter.
+          </p>
+        ) : null}
+
         {escolhido.exigeUrl ? (
           <label className="provider-field">
             <span>URL da instância</span>
@@ -192,6 +216,7 @@ export function SearchSettingsTab() {
           </label>
         ) : null}
 
+        {escolhido.nativa ? null : (
         <label className="provider-field">
           <span>Chave da API{escolhido.exigeChave ? '' : ' (opcional)'}</span>
           <input
@@ -206,6 +231,7 @@ export function SearchSettingsTab() {
             <small className="provider-field-hint">Só é preciso se a sua instância estiver atrás de um proxy autenticado.</small>
           ) : null}
         </label>
+        )}
 
         <label className="provider-field">
           <span>Resultados por busca</span>

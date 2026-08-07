@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isOpenRouterBaseUrl, isRoutingRejection, parseRoutingMode, routingRequestParams } from './routing';
+import { isOpenRouterBaseUrl, parseCitations, webPluginBody } from './openrouter';
 import { reportedCostUsd, calculateCost, calculateUsageAndCost, sumProviderUsage } from './cost';
 import type { ProviderModelConfig } from './providers.config';
 
@@ -11,74 +11,18 @@ const modelo: ProviderModelConfig = {
   pricing: { inputPerMillion: 0.1, outputPerMillion: 0.32, cachedInputPerMillion: null },
 };
 
-describe('modo de roteamento', () => {
-  it('auto não envia campo nenhum', () => {
-    expect(routingRequestParams('auto', 'https://openrouter.ai/api/v1')).toBeNull();
-  });
-
-  it('fast pede o endpoint de maior vazão', () => {
-    expect(routingRequestParams('fast', 'https://openrouter.ai/api/v1')).toEqual({
-      body: { provider: { sort: 'throughput' } },
-      keys: ['provider'],
-    });
-  });
-
+describe('reconhecimento da OpenRouter pela baseURL', () => {
   /**
-   * O ponto da funcionalidade inteira: `provider` é campo da OpenRouter, e um
-   * endpoint que não o conhece pode devolver 400 — derrubando a mensagem por
-   * causa de uma preferência de velocidade.
+   * Id de provedor é livre: alguém pode registrar um chamado `openrouter`
+   * apontando para o próprio servidor. Quem decide é o host — mesma regra do
+   * OpenCode.
    */
-  it('não envia o campo para um endpoint que não é da OpenRouter', () => {
-    expect(routingRequestParams('fast', 'https://api.deepseek.com/v1')).toBeNull();
-    expect(routingRequestParams('fast', 'https://opencode.ai/zen/v1')).toBeNull();
-    expect(routingRequestParams('fast', 'http://localhost:11434/v1')).toBeNull();
-  });
-
-  /**
-   * Mesma regra do OpenCode: id de provedor é livre, e alguém pode registrar
-   * um provedor chamado `openrouter` apontando para o próprio servidor. Quem
-   * decide é o host.
-   */
-  it('reconhece pela baseURL, e um sósia não passa', () => {
+  it('um sósia não passa', () => {
     expect(isOpenRouterBaseUrl('https://openrouter.ai/api/v1')).toBe(true);
     expect(isOpenRouterBaseUrl('https://gateway.openrouter.ai/v1')).toBe(true);
     expect(isOpenRouterBaseUrl('https://openrouter.ai.exemplo.com/v1')).toBe(false);
     expect(isOpenRouterBaseUrl('https://meu-openrouter.com/v1')).toBe(false);
     expect(isOpenRouterBaseUrl('não é uma url')).toBe(false);
-  });
-
-  it('valor desconhecido cai em auto, que é o que não envia nada', () => {
-    expect(parseRoutingMode('turbo')).toBe('auto');
-    expect(parseRoutingMode(undefined)).toBe('auto');
-    expect(parseRoutingMode('fast')).toBe('fast');
-  });
-});
-
-describe('quando o 400 é do campo de roteamento', () => {
-  it('reconhece a reclamação de campo desconhecido', () => {
-    expect(isRoutingRejection(400, '{"error":{"message":"provider: unknown field"}}', ['provider'])).toBe(true);
-    expect(isRoutingRejection(400, 'Unrecognized request argument supplied: provider', ['provider'])).toBe(true);
-  });
-
-  /**
-   * "provider" aparece em quase todo erro de gateway. Desligar o modo rápido
-   * por causa deles faria o usuário perder a preferência sem saber por quê — e
-   * ainda gastaria uma ida à rede para receber o mesmo erro.
-   */
-  it('não confunde erro de gateway com reclamação do campo', () => {
-    for (const corpo of [
-      '{"error":{"message":"No provider available for this model"}}',
-      '{"error":{"message":"Provider returned an error"}}',
-      '{"error":{"message":"All providers failed"}}',
-      '{"error":{"message":"maximum context length is 65536 tokens"}}',
-    ]) {
-      expect(isRoutingRejection(400, corpo, ['provider'])).toBe(false);
-    }
-  });
-
-  it('ignora status que não é 400: 429 e 5xx já têm o próprio caminho', () => {
-    expect(isRoutingRejection(429, 'provider: unknown field', ['provider'])).toBe(false);
-    expect(isRoutingRejection(503, 'provider: unknown field', ['provider'])).toBe(false);
   });
 });
 
@@ -173,5 +117,42 @@ describe('custo informado pelo provedor', () => {
       { prompt_tokens: 300, completion_tokens: 80 },
     ]);
     expect(somado?.cost).toBeUndefined();
+  });
+});
+
+describe('busca nativa da OpenRouter', () => {
+  it('monta o plugin com o limite de resultados', () => {
+    expect(webPluginBody(5)).toEqual({ plugins: [{ id: 'web', max_results: 5 }] });
+  });
+
+  /** O plugin aceita até 10; um número fora disso viraria 400 na mensagem. */
+  it('prende o limite na faixa que a OpenRouter aceita', () => {
+    expect(webPluginBody(0)).toEqual({ plugins: [{ id: 'web', max_results: 1 }] });
+    expect(webPluginBody(99)).toEqual({ plugins: [{ id: 'web', max_results: 10 }] });
+  });
+
+  it('lê as citações do formato url_citation', () => {
+    expect(parseCitations([
+      { type: 'url_citation', url_citation: { url: 'https://a.com/x', title: 'Título', content: 'trecho  com   espaços' } },
+    ])).toEqual([{ title: 'Título', url: 'https://a.com/x', snippet: 'trecho com espaços' }]);
+  });
+
+  /**
+   * Anotação sem URL não vira cartão: o cartão de busca existe para o leitor
+   * poder ir à fonte, e um sem link não leva a lugar nenhum.
+   */
+  it('descarta anotação inutilizável em vez de mostrar cartão vazio', () => {
+    expect(parseCitations([
+      { type: 'url_citation', url_citation: { title: 'sem url' } },
+      { type: 'file', file: {} },
+      'lixo',
+      null,
+    ])).toEqual([]);
+    expect(parseCitations(undefined)).toEqual([]);
+  });
+
+  it('cai no domínio como título quando ele não vem', () => {
+    expect(parseCitations([{ type: 'url_citation', url_citation: { url: 'https://a.com/x' } }])[0].title)
+      .toBe('https://a.com/x');
   });
 });

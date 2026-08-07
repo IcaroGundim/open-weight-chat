@@ -30,7 +30,7 @@ import { artifactMarker } from './artifacts/marker';
 import { createArtifactParser, type ParserEvent } from './artifacts/parser';
 import { composeSystemPrompt } from './artifacts/system-prompt';
 import { calculateUsageAndCost, sumProviderUsage } from './cost';
-import { isOpenRouterBaseUrl } from './routing';
+import { isOpenRouterBaseUrl } from './openrouter';
 import { estimateContextTokens, estimateTokens, trimContext, type ContextMessage } from './context';
 import { AppError, errorPayload, normalizeError } from './errors';
 import { streamOpenAICompatible } from './llm-client';
@@ -638,6 +638,16 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
       await rateLimit.checkChatStart(userId);
       const resolved = await resolveSearch(userId, db);
       if (!resolved) {
+        // Sem baseURL, `resolveSearch` já devolveu null para a busca nativa —
+        // ela depende do modelo escolhido no envio, e aqui não há envio.
+        const settings = await db.getSearchSettings(userId);
+        if (settings?.enabled && settings.backend === 'openrouter') {
+          throw new AppError('UNKNOWN', {
+            status: 400,
+            message: 'A busca da OpenRouter roda junto da mensagem e não tem como ser testada isolada. '
+              + 'Ela funciona ao enviar com um modelo da OpenRouter selecionado.',
+          });
+        }
         throw new AppError('UNKNOWN', {
           status: 400,
           message: 'A busca não está configurada, está desligada ou falta a chave/URL que este buscador exige.',
@@ -1091,13 +1101,17 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
       // Resolvida DENTRO da requisição, como o provedor. `null` quando não há
       // busca utilizável — e aí o prompt de busca nem é injetado, então o
       // modelo nunca pede algo que não vai chegar.
-      const busca = await resolveSearch(userId, db);
+      const busca = await resolveSearch(userId, db, selection.provider.baseURL);
+      // A busca nativa NÃO recebe o prompt de marcador: ela acontece dentro do
+      // pedido, e pedir ao modelo que escreva `<search>` por cima faria duas
+      // buscas — a da OpenRouter e a nossa — e cobraria as duas.
+      const buscaExterna = busca?.kind === 'external' ? busca : null;
       const context = requestContext(
         conversation.systemPrompt,
         await db.getMessages(userId, conversation.id),
         await db.getArtifacts(userId, conversation.id),
         selection.model.ctx,
-        busca ? [searchSystemPrompt(MAX_SEARCH_ROUNDS)] : [],
+        buscaExterna ? [searchSystemPrompt(MAX_SEARCH_ROUNDS)] : [],
         anexosPorMensagem,
         request.spreadsheetSelection,
       );
@@ -1556,7 +1570,6 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                     messages: entrada,
                     temperature: request.temperature,
                     effort: conversation.effort,
-                    routing: request.routing,
                     signal: upstreamController.signal,
                     fetchImpl: options.fetchImpl,
                     onTrace: (evento, detalhe) => { void trace(stream, 'provedor', `agente ${posicao + 1}: ${evento}`, detalhe); },
@@ -1706,9 +1719,9 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                   temperature: request.temperature,
                   // Já sincronizado acima: a conversa é a fonte da verdade.
                   effort: conversation.effort,
-                  // Vem na requisição, não da conversa: é preferência sobre
-                  // velocidade e preço, não sobre o assunto conversado.
-                  routing: request.routing,
+                  // Busca nativa: a OpenRouter busca, injeta e responde na
+                  // mesma requisição. Não há round nem marcador a tratar.
+                  webSearchResults: busca?.kind === 'provider' ? busca.maxResults : undefined,
                   signal: upstreamController.signal,
                   fetchImpl: options.fetchImpl,
                   onTrace: (evento, detalhe) => { void trace(stream, 'provedor', evento, detalhe); },
@@ -1741,6 +1754,25 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                       });
                     }
                     await persistPartial();
+                  } else if (event.kind === 'citations') {
+                    // Reaproveita o cartão de busca da interface: para quem lê,
+                    // "o modelo consultou estas fontes" é a mesma informação,
+                    // independentemente de quem foi até a web. A consulta não
+                    // vem nas anotações — a OpenRouter não a expõe — e dizer
+                    // "busca na web" é melhor do que inventar um termo.
+                    await emit(stream, {
+                      type: 'search_end',
+                      query: 'busca na web (OpenRouter)',
+                      round: 1,
+                      results: event.citations.map((citacao) => ({
+                        title: citacao.title,
+                        url: citacao.url,
+                        snippet: citacao.snippet,
+                      })),
+                      failure: null,
+                      conversationId: conversation.id,
+                      messageId: assistant.id,
+                    });
                   } else if (event.kind === 'usage') {
                     usoDoRound = event.usage;
                     rawUsage = event.usage;
@@ -1760,7 +1792,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
 
                 // `busca` é não-nulo aqui por construção: sem ela o prompt de
                 // busca não foi injetado, e o modelo não teria como pedir uma.
-                if (!busca || round > MAX_SEARCH_ROUNDS) {
+                if (!buscaExterna || round > MAX_SEARCH_ROUNDS) {
                   const aviso = `\n\n_Limite de ${MAX_SEARCH_ROUNDS} buscas por resposta atingido._\n\n`;
                   await consumeParserEvents(parser.push(aviso), stream);
                   break;
@@ -1773,7 +1805,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                   conversationId: conversation.id,
                   messageId: assistant.id,
                 });
-                const resultado = await runSearch(busca, consultaPedida, upstreamController.signal, options.fetchImpl);
+                const resultado = await runSearch(buscaExterna, consultaPedida, upstreamController.signal, options.fetchImpl);
                 await emit(stream, {
                   type: 'search_end',
                   query: consultaPedida,
