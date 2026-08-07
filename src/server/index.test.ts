@@ -253,6 +253,81 @@ describe('Hono API multiusuário', () => {
     );
   }
 
+  /**
+   * O caminho inteiro da busca nativa, do banco ao SSE: a configuração diz
+   * `openrouter`, o modelo é da OpenRouter, o corpo que sai leva o plugin, e
+   * as citações que voltam viram o cartão de busca da interface.
+   */
+  it('a busca nativa vai no corpo e as citações viram cartão de busca', async () => {
+    process.env.ALLOW_ENV_API_KEYS = 'true';
+    process.env.OPENROUTER_API_KEY = 'chave-de-teste';
+    const corpos: string[] = [];
+    const app = appFor(database, USER_A, async (_input, init) => {
+      corpos.push(String(init?.body));
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"o preço subiu"}}]}\n\n'
+        + 'data: {"choices":[{"delta":{"annotations":[{"type":"url_citation",'
+        + '"url_citation":{"url":"https://exemplo.com/cafe","title":"Café hoje","content":"subiu 3%"}}]}}]}\n\n'
+        + 'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.0071}}\n\n'
+        + 'data: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    });
+
+    const salva = await configurarBusca(app, { backend: 'openrouter', baseURL: undefined, maxResults: 4 });
+    expect(salva.status).toBe(200);
+    // Sem chave de buscador e sem URL: é a da OpenRouter que já está posta.
+    expect(await salva.json()).toMatchObject({ settings: { backend: 'openrouter', enabled: true, hasKey: false } });
+
+    const resposta = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody({ providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash' }),
+    });
+    expect(resposta.status).toBe(200);
+    const texto = await resposta.text();
+
+    // 1. O plugin saiu no corpo, com o limite configurado.
+    expect(JSON.parse(corpos[0]).plugins).toEqual([{ id: 'web', max_results: 4 }]);
+    // 2. O prompt de marcador NÃO foi injetado: as duas buscas não convivem.
+    expect(corpos[0]).not.toContain('<search>');
+    // 3. Uma chamada só — sem os rounds do protocolo de marcador.
+    expect(corpos).toHaveLength(1);
+    // 4. A citação virou cartão de busca para a interface.
+    expect(texto).toContain('search_end');
+    expect(texto).toContain('https://exemplo.com/cafe');
+    // 5. O custo veio da OpenRouter, não da tabela, e não é estimativa.
+    const usage = texto.split('\n').filter((linha) => linha.includes('"type":"usage"')).pop() ?? '';
+    expect(usage).toContain('"reported":true');
+    expect(usage).toContain('0.0071');
+  });
+
+  it('com um modelo de outro provedor, a busca nativa não promete nada ao modelo', async () => {
+    const corpos: string[] = [];
+    const app = appFor(database, USER_A, async (_input, init) => {
+      corpos.push(String(init?.body));
+      return sseComTexto('respondo com o que sei');
+    });
+    // Guarda contra um teste que passaria sozinho: se a configuração não
+    // tivesse sido salva, "sem plugin e sem marcador" seria verdade à toa.
+    const salva = await configurarBusca(app, { backend: 'openrouter', baseURL: undefined });
+    expect(salva.status).toBe(200);
+    expect(await salva.json()).toMatchObject({ settings: { backend: 'openrouter', enabled: true } });
+
+    const resposta = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody(),
+    });
+    expect(resposta.status).toBe(200);
+    await resposta.text();
+
+    // Nem o plugin (o endpoint não o conhece) nem o prompt de marcador (não há
+    // buscador nosso configurado). O modelo não fica sabendo da busca.
+    expect(JSON.parse(corpos[0])).not.toHaveProperty('plugins');
+    expect(corpos[0]).not.toContain('<search>');
+  });
+
   it('faz a busca pedida pelo modelo e devolve os resultados para ele responder', async () => {
     const corposDeChat: string[] = [];
     let consultaRecebida: string | null = null;
