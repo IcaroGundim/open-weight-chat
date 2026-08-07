@@ -7,6 +7,7 @@ const DENSITY_STORAGE_KEY = 'open-weight-chat.density';
 const MOTION_STORAGE_KEY = 'open-weight-chat.reduce-motion';
 const EFFORT_STORAGE_KEY = 'open-weight-chat.default-effort';
 const ARTIFACT_WIDTH_STORAGE_KEY = 'open-weight-chat.artifact-width';
+const WEB_SEARCH_STORAGE_KEY = 'open-weight-chat.web-search';
 
 /**
  * Largura do painel de artefato, em porcentagem da janela.
@@ -23,6 +24,18 @@ export const ARTIFACT_WIDTH_DEFAULT = 42;
 export function clampArtifactWidth(value: number): number {
   if (!Number.isFinite(value)) return ARTIFACT_WIDTH_DEFAULT;
   return Math.min(ARTIFACT_WIDTH_MAX, Math.max(ARTIFACT_WIDTH_MIN, Math.round(value * 10) / 10));
+}
+
+/**
+ * Busca na web ligada?
+ *
+ * Nasce **desligada**. O plugin da OpenRouter busca em toda requisição, sem
+ * o modelo decidir, então deixá-lo ligado por padrão consulta a web até para
+ * "resuma este texto" — e cobra a busca em cada uma.
+ */
+function initialWebSearch(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true';
 }
 
 function initialTheme(): ThemeMode {
@@ -63,11 +76,13 @@ interface SettingsState {
   density: DensityMode;
   reduceMotion: boolean;
   defaultEffort: EffortLevel;
+  webSearch: boolean;
   artifactWidth: number;
   setTheme: (theme: ThemeMode) => void;
   setDensity: (density: DensityMode) => void;
   setReduceMotion: (reduceMotion: boolean) => void;
   setDefaultEffort: (effort: EffortLevel) => void;
+  setWebSearch: (on: boolean) => void;
   setArtifactWidth: (percent: number) => void;
   toggleTheme: () => void;
   resetPreferences: () => void;
@@ -78,6 +93,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   density: initialDensity(),
   reduceMotion: initialReduceMotion(),
   defaultEffort: initialDefaultEffort(),
+  webSearch: initialWebSearch(),
   artifactWidth: initialArtifactWidth(),
   setTheme: (theme) => {
     if (typeof window !== 'undefined') window.localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -94,6 +110,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setDefaultEffort: (defaultEffort) => {
     if (typeof window !== 'undefined') window.localStorage.setItem(EFFORT_STORAGE_KEY, defaultEffort);
     set({ defaultEffort });
+  },
+  setWebSearch: (webSearch) => {
+    if (typeof window !== 'undefined') window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(webSearch));
+    set({ webSearch });
   },
   toggleTheme: () => {
     const theme = get().theme === 'dark' ? 'light' : 'dark';
@@ -112,7 +132,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       window.localStorage.removeItem(MOTION_STORAGE_KEY);
       window.localStorage.removeItem(EFFORT_STORAGE_KEY);
       window.localStorage.removeItem(ARTIFACT_WIDTH_STORAGE_KEY);
+      window.localStorage.removeItem(WEB_SEARCH_STORAGE_KEY);
     }
-    set({ theme: 'light', density: 'comfortable', reduceMotion: false, defaultEffort: 'auto', artifactWidth: ARTIFACT_WIDTH_DEFAULT });
+    set({ theme: 'light', density: 'comfortable', reduceMotion: false, defaultEffort: 'auto', webSearch: false, artifactWidth: ARTIFACT_WIDTH_DEFAULT });
   },
 }));

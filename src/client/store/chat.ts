@@ -9,6 +9,7 @@ import {
   getConversation,
   getConversations,
   getModels,
+  getSearchSettings,
   renameConversation as renameConversationRequest,
   setConversationEffort,
   streamChat,
@@ -137,6 +138,14 @@ interface ChatState {
   openSpreadsheetId: string | null;
   pendingSpreadsheetSelection: SpreadsheetSelection | null;
   isLoadingModels: boolean;
+  /**
+   * Existe busca configurada e ligada nas configurações?
+   *
+   * O botão de busca do compositor depende disto: um interruptor que não liga
+   * nada é pior do que interruptor nenhum — ele promete um recurso e não
+   * explica por que não acontece.
+   */
+  searchAvailable: boolean;
   isLoadingConversations: boolean;
   loadingConversationId: string | null;
   isStreaming: boolean;
@@ -153,6 +162,7 @@ interface ChatState {
   error: string | null;
 
   loadModels: () => Promise<void>;
+  loadSearchAvailability: () => Promise<void>;
   loadConversations: () => Promise<void>;
   selectConversation: (id: string | null) => Promise<void>;
   newConversation: () => void;
@@ -191,6 +201,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   openSpreadsheetId: null,
   pendingSpreadsheetSelection: null,
   isLoadingModels: false,
+  searchAvailable: false,
   isLoadingConversations: false,
   loadingConversationId: null,
   isStreaming: false,
@@ -201,6 +212,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingEffort: null,
   pendingScience: null,
   error: null,
+
+  loadSearchAvailability: async () => {
+    const epoch = sessionEpoch;
+    try {
+      const { settings } = await getSearchSettings();
+      if (!isCurrentSession(epoch)) return;
+      set({ searchAvailable: Boolean(settings?.enabled) });
+    } catch {
+      // Falha aqui não é erro do usuário nem impede conversar: o botão some e
+      // a busca fica indisponível, que é o mesmo estado de não ter configurado.
+      if (isCurrentSession(epoch)) set({ searchAvailable: false });
+    }
+  },
 
   loadModels: async () => {
     const epoch = sessionEpoch;
@@ -637,6 +661,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           providerId: selected.providerId,
           modelId: selected.id,
           effort: get().conversations.find((conversation) => conversation.id === conversationId)?.effort ?? 'auto',
+          // Sempre explícito: o servidor trata ausente como ligado, e é a
+          // interface que conhece a escolha do usuário.
+          webSearch: useSettingsStore.getState().webSearch,
           ...(attachments.length > 0 ? { attachmentIds: attachments.map((anexo) => anexo.id) } : {}),
           ...(spreadsheetSelection ? {
             spreadsheetSelection: {

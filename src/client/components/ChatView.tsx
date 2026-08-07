@@ -83,6 +83,7 @@ export function ChatView() {
   const isStreaming = useChatStore((state) => state.isStreaming);
   const error = useChatStore((state) => state.error);
   const loadModels = useChatStore((state) => state.loadModels);
+  const loadSearchAvailability = useChatStore((state) => state.loadSearchAvailability);
   const loadConversations = useChatStore((state) => state.loadConversations);
   const enviarDaStore = useChatStore((state) => state.sendMessage);
   const stopStreaming = useChatStore((state) => state.stopStreaming);
@@ -132,7 +133,8 @@ export function ChatView() {
   useEffect(() => {
     void loadModels();
     void loadConversations();
-  }, [loadConversations, loadModels]);
+    void loadSearchAvailability();
+  }, [loadConversations, loadModels, loadSearchAvailability]);
 
   useEffect(() => {
     if ((!openArtifactSelection && !openSpreadsheetId) || typeof window === 'undefined') return;

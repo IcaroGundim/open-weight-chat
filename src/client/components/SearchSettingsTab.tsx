@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Globe, ShieldAlert } from 'lucide-react';
 import { deleteSearchSettings, getSearchSettings, putSearchSettings, testSearchSettings } from '../api';
+import { useChatStore } from '../store/chat';
 import type { SearchBackend, SearchResult, SearchSettings, SecretStorageStatus } from '../types';
 
 /**
@@ -60,6 +61,7 @@ function mensagemDe(motivo: unknown, padrao: string): string {
 }
 
 export function SearchSettingsTab() {
+  const loadSearchAvailability = useChatStore((state) => state.loadSearchAvailability);
   const [settings, setSettings] = useState<SearchSettings | null>(null);
   const [secretStorage, setSecretStorage] = useState<SecretStorageStatus>({ available: true, reason: null });
   const [backend, setBackend] = useState<SearchBackend>('brave');
@@ -110,7 +112,12 @@ export function SearchSettingsTab() {
       });
       setSettings(salvo);
       setApiKey('');
-      setSucesso(enabled ? 'Busca configurada. Os modelos já podem consultar a web.' : 'Busca desligada.');
+      // O botão do compositor aparece a partir daqui: sem este aviso, quem
+      // acabou de configurar teria de recarregar a página para vê-lo.
+      void loadSearchAvailability();
+      setSucesso(enabled
+        ? 'Busca configurada. Ligue o botão “Buscar”, ao lado do campo de mensagem, quando quiser consultar a web.'
+        : 'Busca desligada.');
     } catch (motivo) {
       setErro(mensagemDe(motivo, 'Não foi possível salvar a configuração de busca.'));
     } finally {
@@ -142,6 +149,7 @@ export function SearchSettingsTab() {
     try {
       await deleteSearchSettings();
       setSettings(null);
+      void loadSearchAvailability();
       setApiKey('');
       setBaseURL('');
       setSucesso('Configuração de busca apagada.');

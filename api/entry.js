@@ -412,6 +412,19 @@ var ChatRequestSchema = z.object({
   /** Ausente equivale a `auto`: nenhum parâmetro de raciocínio é enviado. */
   effort: EffortLevelSchema.optional(),
   /**
+   * Buscar na web nesta mensagem.
+   *
+   * Vale para os dois caminhos de busca — o buscador externo e o plugin da
+   * OpenRouter — porque para quem escreve a pergunta é uma decisão só.
+   *
+   * Ausente equivale a ligado, para não mudar o comportamento de quem chama a
+   * API direto. A interface manda o valor sempre, e o botão nasce desligado:
+   * o plugin da OpenRouter busca em TODA requisição, e deixá-lo ligado por
+   * padrão fazia o modelo consultar a web para perguntas que ele já sabia
+   * responder — e cobrava a busca em cada uma.
+   */
+  webSearch: z.boolean().optional(),
+  /**
    * Anexos já enviados, referenciados por id.
    *
    * O upload é uma requisição separada de propósito: mandar os bytes junto do
@@ -5920,7 +5933,7 @@ function createApp(options = {}) {
         });
         if (atualizada) conversation = atualizada;
       }
-      const busca = await resolveSearch(userId, db, selection.provider.baseURL);
+      const busca = request.webSearch === false ? null : await resolveSearch(userId, db, selection.provider.baseURL);
       const buscaExterna = busca?.kind === "external" ? busca : null;
       const context = requestContext(
         conversation.systemPrompt,

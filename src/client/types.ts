@@ -392,6 +392,7 @@ export interface ChatRequest {
   providerId: string;
   modelId: string;
   effort?: EffortLevel;
+  webSearch?: boolean;
   attachmentIds?: string[];
   spreadsheetSelection?: Omit<SpreadsheetSelection, 'filename'>;
   scienceLevel?: ScienceLevel;

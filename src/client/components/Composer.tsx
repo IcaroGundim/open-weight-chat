@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileSpreadsheet, FileText, Paperclip, Square, X } from 'lucide-react';
 import { EffortPicker } from './EffortPicker';
 import { SciencePicker } from './SciencePicker';
+import { WebSearchToggle } from './WebSearchToggle';
 import { useSettingsStore } from '../store/settings';
 import { attachmentUrl, deleteAttachment, uploadAttachment } from '../api';
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, type Attachment, type EffortLevel, type ScienceFormat, type ScienceLevel } from '../types';
@@ -51,6 +52,9 @@ export function Composer({
   const openSpreadsheet = useChatStore((state) => state.openSpreadsheet);
   const pendingSelection = useChatStore((state) => state.pendingSpreadsheetSelection);
   const useSpreadsheetSelection = useChatStore((state) => state.useSpreadsheetSelection);
+  const searchAvailable = useChatStore((state) => state.searchAvailable);
+  const webSearch = useSettingsStore((state) => state.webSearch);
+  const setWebSearch = useSettingsStore((state) => state.setWebSearch);
 
   /**
    * Recebe arquivos de qualquer das três portas: botão, colar e arrastar.
@@ -237,6 +241,9 @@ export function Composer({
           />
           <EffortPicker value={effort} onChange={onEffortChange} disabled={isStreaming} />
           <SciencePicker level={scienceLevel} format={scienceFormat} onChange={onScienceChange} disabled={isStreaming} />
+          {searchAvailable ? (
+            <WebSearchToggle value={webSearch} onChange={setWebSearch} disabled={isStreaming} />
+          ) : null}
           <span className="composer-hint"><b>Enter</b> envia · <b>Shift + Enter</b> quebra linha</span>
         </div>
         <div className="composer-actions">

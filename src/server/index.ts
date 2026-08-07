@@ -1101,7 +1101,12 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
       // Resolvida DENTRO da requisição, como o provedor. `null` quando não há
       // busca utilizável — e aí o prompt de busca nem é injetado, então o
       // modelo nunca pede algo que não vai chegar.
-      const busca = await resolveSearch(userId, db, selection.provider.baseURL);
+      // O botão da interface decide antes de qualquer resolução: desligado,
+      // não há busca nenhuma a montar, e o modelo nem fica sabendo que ela
+      // existe — a mesma regra de sempre.
+      const busca = request.webSearch === false
+        ? null
+        : await resolveSearch(userId, db, selection.provider.baseURL);
       // A busca nativa NÃO recebe o prompt de marcador: ela acontece dentro do
       // pedido, e pedir ao modelo que escreva `<search>` por cima faria duas
       // buscas — a da OpenRouter e a nossa — e cobraria as duas.

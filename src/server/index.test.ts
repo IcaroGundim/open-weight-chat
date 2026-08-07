@@ -332,6 +332,65 @@ describe('Hono API multiusuário', () => {
    * A OpenRouter repete a lista inteira de anotações a cada chunk. Emitir um
    * cartão por chunk empilhava o mesmo resultado várias vezes na mensagem.
    */
+  /**
+   * O botão do compositor é a única coisa que decide, e ele vale para os dois
+   * caminhos de busca. O plugin da OpenRouter não decide nada por conta: uma
+   * vez ativado, ele busca em TODA requisição — inclusive em "resuma este
+   * texto" — e cobra cada uma.
+   */
+  it('desligado no envio, nenhuma busca acontece', async () => {
+    process.env.ALLOW_ENV_API_KEYS = 'true';
+    process.env.OPENROUTER_API_KEY = 'chave-de-teste';
+    const corpos: string[] = [];
+    const app = appFor(database, USER_A, async (_input, init) => {
+      corpos.push(String(init?.body));
+      return sseComTexto('respondo com o que já sei');
+    });
+    expect((await configurarBusca(app, { backend: 'openrouter', baseURL: undefined })).status).toBe(200);
+
+    const resposta = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody({ providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash', webSearch: false }),
+    });
+    expect(resposta.status).toBe(200);
+    await resposta.text();
+    expect(JSON.parse(corpos[0])).not.toHaveProperty('plugins');
+  });
+
+  it('desligado também não promete o buscador externo ao modelo', async () => {
+    const corpos: string[] = [];
+    const app = appFor(database, USER_A, async (_input, init) => {
+      corpos.push(String(init?.body));
+      return sseComTexto('ok');
+    });
+    expect((await configurarBusca(app)).status).toBe(200);
+
+    await (await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody({ webSearch: false }),
+    })).text();
+    // Sem o prompt de marcador o modelo nem fica sabendo que a busca existe.
+    expect(corpos[0]).not.toContain('<search>');
+  });
+
+  it('ausente equivale a ligado, para quem chama a API direto', async () => {
+    const corpos: string[] = [];
+    const app = appFor(database, USER_A, async (_input, init) => {
+      corpos.push(String(init?.body));
+      return sseComTexto('ok');
+    });
+    expect((await configurarBusca(app)).status).toBe(200);
+
+    await (await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody(),
+    })).text();
+    expect(corpos[0]).toContain('<search>');
+  });
+
   it('as citações repetidas viram um cartão só', async () => {
     process.env.ALLOW_ENV_API_KEYS = 'true';
     process.env.OPENROUTER_API_KEY = 'chave-de-teste';

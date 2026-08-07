@@ -728,6 +728,9 @@ body[data-redimensionando] .artifact-resizer-alca { opacity: 1; background: var(
   border-radius: 8px;
 }
 
+/* Busca ligada usa o mesmo vinho de "ativo" do resto da interface. */
+.busca-toggle[data-ativo] { color: var(--wine); }
+
 /* Contador de tokens por segundo. Sem mostrador: ver TokenRate.tsx. */
 .taxa-tokens { display: inline-flex; align-items: baseline; gap: 3px; }
 .taxa-tokens b { color: var(--ink-2); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
