@@ -64,3 +64,35 @@ export function routingRequestParams(mode: RoutingMode, baseURL: string): Routin
   if (!isOpenRouterBaseUrl(baseURL)) return null;
   return { body: { provider: { sort: 'throughput' } }, keys: ['provider'] };
 }
+
+/**
+ * O 400 foi por causa do campo `provider`?
+ *
+ * Não dá para reaproveitar `isEffortRejection` aqui, e a diferença é a palavra:
+ * `reasoning_effort` só aparece num corpo de erro quando é o campo reclamado,
+ * mas "provider" aparece em quase todo erro de gateway — "no provider
+ * available", "provider returned an error", "all providers failed". Casar por
+ * substring faria o modo rápido ser desligado por erros que nada têm a ver com
+ * ele, e o usuário perderia a preferência sem nunca saber por quê.
+ *
+ * Por isso exige-se a coocorrência com o vocabulário de campo desconhecido, que
+ * é o único caso em que remover o campo e repetir tem chance de resolver.
+ */
+const VOCABULARIO_DE_CAMPO = [
+  'unknown',
+  'unrecognized',
+  'unsupported',
+  'not supported',
+  'invalid',
+  'unexpected',
+  'not allowed',
+  'additional properties',
+  'extra fields',
+];
+
+export function isRoutingRejection(status: number, body: string, keys: readonly string[]): boolean {
+  if (status !== 400 || keys.length === 0) return false;
+  const lowered = body.toLowerCase();
+  if (!keys.some((key) => lowered.includes(key.toLowerCase()))) return false;
+  return VOCABULARIO_DE_CAMPO.some((termo) => lowered.includes(termo));
+}

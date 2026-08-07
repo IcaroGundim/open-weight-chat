@@ -30,6 +30,7 @@ import { artifactMarker } from './artifacts/marker';
 import { createArtifactParser, type ParserEvent } from './artifacts/parser';
 import { composeSystemPrompt } from './artifacts/system-prompt';
 import { calculateUsageAndCost, sumProviderUsage } from './cost';
+import { isOpenRouterBaseUrl } from './routing';
 import { estimateContextTokens, estimateTokens, trimContext, type ContextMessage } from './context';
 import { AppError, errorPayload, normalizeError } from './errors';
 import { streamOpenAICompatible } from './llm-client';
@@ -1903,6 +1904,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                 // o round corrente pode ter sido interrompido antes de o uso
                 // ser registrado na lista.
                 raw: sumProviderUsage(usoPorRound) ?? rawUsage,
+                reportsCostUsd: isOpenRouterBaseUrl(selection.provider.baseURL),
                 promptText,
                 completionText: completionText(),
                 reasoningText: reasoning,
@@ -1948,6 +1950,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                 // o round corrente pode ter sido interrompido antes de o uso
                 // ser registrado na lista.
                 raw: sumProviderUsage(usoPorRound) ?? rawUsage,
+                reportsCostUsd: isOpenRouterBaseUrl(selection.provider.baseURL),
                 promptText,
                 completionText: completionText(),
                 reasoningText: reasoning,

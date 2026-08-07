@@ -9,6 +9,16 @@ export interface UsageInput {
   promptText: string;
   completionText: string;
   reasoningText?: string;
+  /**
+   * O endpoint informa custo em dólares no uso?
+   *
+   * Só quem sabe disso é quem resolveu o provedor, e a resposta vem da baseURL
+   * efetiva — nunca do id, que é livre. Sem esta trava, um endpoint qualquer
+   * que devolvesse um campo `cost` na sua própria unidade viraria custo em
+   * dólar marcado como exato: erro silencioso e apresentado como medida, que é
+   * o pior estado possível para este número.
+   */
+  reportsCostUsd?: boolean;
 }
 
 export interface CostCalculation {
@@ -110,7 +120,11 @@ export function sumProviderUsage(rounds: readonly (ProviderUsageLike | null)[]):
  */
 export function reportedCostUsd(raw: ProviderUsageLike | null | undefined): number | undefined {
   if (!raw) return undefined;
-  return nestedNumber(raw, [['cost'], ['costUsd'], ['cost_details', 'upstream_inference_cost']]);
+  // Só o total. `cost_details.upstream_inference_cost` é a PARCELA que o
+  // provedor de origem cobrou da OpenRouter, não o que a requisição custou —
+  // usá-la como total informaria menos do que foi cobrado, com a etiqueta de
+  // valor exato por cima.
+  return nestedNumber(raw, [['cost'], ['costUsd']]);
 }
 
 export function normalizeUsage(input: UsageInput): Usage {
@@ -179,6 +193,7 @@ export function calculateCost(model: ProviderModelConfig, usage: Usage, reported
 
 export function calculateUsageAndCost(model: ProviderModelConfig, input: UsageInput): CostCalculation {
   const usage = normalizeUsage(input);
-  return { usage, cost: calculateCost(model, usage, reportedCostUsd(input.raw)) };
+  const informado = input.reportsCostUsd ? reportedCostUsd(input.raw) : undefined;
+  return { usage, cost: calculateCost(model, usage, informado) };
 }
 

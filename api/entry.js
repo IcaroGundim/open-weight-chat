@@ -1364,7 +1364,7 @@ function sumProviderUsage(rounds) {
 }
 function reportedCostUsd(raw) {
   if (!raw) return void 0;
-  return nestedNumber(raw, [["cost"], ["costUsd"], ["cost_details", "upstream_inference_cost"]]);
+  return nestedNumber(raw, [["cost"], ["costUsd"]]);
 }
 function normalizeUsage(input) {
   const raw = input.raw ?? {};
@@ -1420,7 +1420,43 @@ function calculateCost(model, usage2, reported) {
 }
 function calculateUsageAndCost(model, input) {
   const usage2 = normalizeUsage(input);
-  return { usage: usage2, cost: calculateCost(model, usage2, reportedCostUsd(input.raw)) };
+  const informado = input.reportsCostUsd ? reportedCostUsd(input.raw) : void 0;
+  return { usage: usage2, cost: calculateCost(model, usage2, informado) };
+}
+
+// src/server/routing.ts
+function isOpenRouterBaseUrl(baseURL) {
+  let url;
+  try {
+    url = new URL(baseURL);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
+}
+function routingRequestParams(mode, baseURL) {
+  if (mode !== "fast") return null;
+  if (!isOpenRouterBaseUrl(baseURL)) return null;
+  return { body: { provider: { sort: "throughput" } }, keys: ["provider"] };
+}
+var VOCABULARIO_DE_CAMPO = [
+  "unknown",
+  "unrecognized",
+  "unsupported",
+  "not supported",
+  "invalid",
+  "unexpected",
+  "not allowed",
+  "additional properties",
+  "extra fields"
+];
+function isRoutingRejection(status, body, keys) {
+  if (status !== 400 || keys.length === 0) return false;
+  const lowered = body.toLowerCase();
+  if (!keys.some((key) => lowered.includes(key.toLowerCase()))) return false;
+  return VOCABULARIO_DE_CAMPO.some((termo) => lowered.includes(termo));
 }
 
 // src/server/errors.ts
@@ -1790,24 +1826,6 @@ function isEffortRejection(status, body, keys) {
   return keys.some((key) => lowered.includes(key.toLowerCase()));
 }
 
-// src/server/routing.ts
-function isOpenRouterBaseUrl(baseURL) {
-  let url;
-  try {
-    url = new URL(baseURL);
-  } catch {
-    return false;
-  }
-  if (url.protocol !== "https:") return false;
-  const host = url.hostname.toLowerCase();
-  return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
-}
-function routingRequestParams(mode, baseURL) {
-  if (mode !== "fast") return null;
-  if (!isOpenRouterBaseUrl(baseURL)) return null;
-  return { body: { provider: { sort: "throughput" } }, keys: ["provider"] };
-}
-
 // src/server/llm-client.ts
 function serializeMessage(message2) {
   if (!message2.images || message2.images.length === 0) {
@@ -2076,7 +2094,7 @@ var OpenAICompatibleClient = class {
       }
       if (!response.ok) {
         const body = await readLimitedText(response);
-        if (routing && isEffortRejection(response.status, body, routing.keys)) {
+        if (routing && isRoutingRejection(response.status, body, routing.keys)) {
           options.onTrace?.("roteamento recusado pelo provedor", `400 \xB7 refazendo sem ${routing.keys.join(", ")}`);
           routing = null;
           attempt -= 1;
@@ -6577,6 +6595,7 @@ _Aviso: ${falhasDeEstagio.length === 1 ? "um est\xE1gio n\xE3o concluiu" : `${fa
                 // o round corrente pode ter sido interrompido antes de o uso
                 // ser registrado na lista.
                 raw: sumProviderUsage(usoPorRound) ?? rawUsage,
+                reportsCostUsd: isOpenRouterBaseUrl(selection.provider.baseURL),
                 promptText,
                 completionText: completionText(),
                 reasoningText: reasoning
@@ -6622,6 +6641,7 @@ _Aviso: ${falhasDeEstagio.length === 1 ? "um est\xE1gio n\xE3o concluiu" : `${fa
                 // o round corrente pode ter sido interrompido antes de o uso
                 // ser registrado na lista.
                 raw: sumProviderUsage(usoPorRound) ?? rawUsage,
+                reportsCostUsd: isOpenRouterBaseUrl(selection.provider.baseURL),
                 promptText,
                 completionText: completionText(),
                 reasoningText: reasoning

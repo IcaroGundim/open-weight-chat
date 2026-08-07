@@ -1,7 +1,7 @@
 import { AppError, UpstreamHttpError, isAbortError, normalizeError } from './errors';
 import { safeFetchWithRedirects } from './ssrf';
 import { type EffortRequestParams, effortRequestParams, isEffortRejection } from './effort';
-import { type RoutingRequestParams, routingRequestParams } from './routing';
+import { type RoutingRequestParams, isRoutingRejection, routingRequestParams } from './routing';
 import type { EffortLevel, ProviderId, RoutingMode } from '../shared/types';
 import type { ProviderUsageLike } from './cost';
 
@@ -405,7 +405,7 @@ export class OpenAICompatibleClient {
         // causa de uma preferência que este endpoint não conhece. Acontece no
         // máximo uma vez — `effort` vira null — e não gasta o orçamento de
         // retentativa de 429/5xx, que existe para outra coisa.
-        if (routing && isEffortRejection(response.status, body, routing.keys)) {
+        if (routing && isRoutingRejection(response.status, body, routing.keys)) {
           options.onTrace?.('roteamento recusado pelo provedor', `400 · refazendo sem ${routing.keys.join(', ')}`);
           routing = null;
           attempt -= 1;

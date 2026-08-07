@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isOpenRouterBaseUrl, parseRoutingMode, routingRequestParams } from './routing';
+import { isOpenRouterBaseUrl, isRoutingRejection, parseRoutingMode, routingRequestParams } from './routing';
 import { reportedCostUsd, calculateCost, calculateUsageAndCost, sumProviderUsage } from './cost';
 import type { ProviderModelConfig } from './providers.config';
 
@@ -54,6 +54,34 @@ describe('modo de roteamento', () => {
   });
 });
 
+describe('quando o 400 é do campo de roteamento', () => {
+  it('reconhece a reclamação de campo desconhecido', () => {
+    expect(isRoutingRejection(400, '{"error":{"message":"provider: unknown field"}}', ['provider'])).toBe(true);
+    expect(isRoutingRejection(400, 'Unrecognized request argument supplied: provider', ['provider'])).toBe(true);
+  });
+
+  /**
+   * "provider" aparece em quase todo erro de gateway. Desligar o modo rápido
+   * por causa deles faria o usuário perder a preferência sem saber por quê — e
+   * ainda gastaria uma ida à rede para receber o mesmo erro.
+   */
+  it('não confunde erro de gateway com reclamação do campo', () => {
+    for (const corpo of [
+      '{"error":{"message":"No provider available for this model"}}',
+      '{"error":{"message":"Provider returned an error"}}',
+      '{"error":{"message":"All providers failed"}}',
+      '{"error":{"message":"maximum context length is 65536 tokens"}}',
+    ]) {
+      expect(isRoutingRejection(400, corpo, ['provider'])).toBe(false);
+    }
+  });
+
+  it('ignora status que não é 400: 429 e 5xx já têm o próprio caminho', () => {
+    expect(isRoutingRejection(429, 'provider: unknown field', ['provider'])).toBe(false);
+    expect(isRoutingRejection(503, 'provider: unknown field', ['provider'])).toBe(false);
+  });
+});
+
 describe('custo informado pelo provedor', () => {
   it('lê o campo cost da OpenRouter', () => {
     expect(reportedCostUsd({ completion_tokens: 100, cost: 0.00234 })).toBe(0.00234);
@@ -83,6 +111,7 @@ describe('custo informado pelo provedor', () => {
       raw: { prompt_tokens: 1_000, completion_tokens: 1_000_000 },
       promptText: 'oi',
       completionText: 'tchau',
+      reportsCostUsd: true,
     });
     expect(semInformado.cost.usd).toBeCloseTo(0.3201, 4);
     expect(semInformado.cost.reported).toBe(false);
@@ -91,10 +120,39 @@ describe('custo informado pelo provedor', () => {
       raw: { prompt_tokens: 1_000, completion_tokens: 1_000_000, cost: 2.2531 },
       promptText: 'oi',
       completionText: 'tchau',
+      reportsCostUsd: true,
     });
     expect(comInformado.cost.usd).toBe(2.2531);
     expect(comInformado.cost.reported).toBe(true);
     expect(comInformado.cost.estimated).toBe(false);
+  });
+
+  /**
+   * A trava por baseURL. Um endpoint qualquer que devolva um campo `cost` na
+   * sua própria unidade não pode virar dólar marcado como exato — seria um
+   * erro silencioso com etiqueta de medida, o pior estado deste número.
+   */
+  it('só aceita o custo de quem sabidamente informa em dólar', () => {
+    const entrada = {
+      raw: { prompt_tokens: 1_000, completion_tokens: 1_000_000, cost: 999 },
+      promptText: 'oi',
+      completionText: 'tchau',
+    };
+    const semTrava = calculateUsageAndCost(modelo, entrada);
+    expect(semTrava.cost.reported).toBe(false);
+    expect(semTrava.cost.usd).toBeCloseTo(0.3201, 4);
+
+    expect(calculateUsageAndCost(modelo, { ...entrada, reportsCostUsd: true }).cost.usd).toBe(999);
+  });
+
+  /**
+   * `upstream_inference_cost` é a PARCELA que o provedor de origem cobrou da
+   * OpenRouter, não o total da requisição. Tratá-la como total informaria
+   * menos do que foi cobrado — com etiqueta de valor exato por cima.
+   */
+  it('não confunde a parcela do upstream com o total', () => {
+    expect(reportedCostUsd({ cost_details: { upstream_inference_cost: 0.002 } })).toBeUndefined();
+    expect(reportedCostUsd({ cost: 0.005, cost_details: { upstream_inference_cost: 0.002 } })).toBe(0.005);
   });
 
   it('soma o custo informado por todos os rounds de busca', () => {
