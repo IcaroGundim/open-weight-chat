@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ClerkProvider } from '@clerk/react';
+import { ptBR } from '@clerk/localizations';
 import { configureTheme } from '@usefragments/ui';
 import '@usefragments/ui/styles';
 import { AuthenticatedApp } from './auth';
@@ -20,6 +21,20 @@ configureTheme({ brand: '#7a2338', radiusStyle: 'subtle' });
 // Publishable key do Clerk (pública por definição). Em dev, defina no .env.local:
 //   VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+
+/**
+ * Português do Brasil, com os subtítulos reescritos.
+ *
+ * Os originais são "para continuar em {{applicationName}}", e essa variável
+ * vem do nome cadastrado no painel do Clerk — que aqui é o slug do projeto.
+ * O cartão exibia "para continuar em open-weight-chat". Reescrever aqui
+ * resolve no código, sem depender de alguém lembrar de renomear no painel.
+ */
+const traducao = {
+  ...ptBR,
+  signIn: { ...ptBR.signIn, start: { ...ptBR.signIn?.start, subtitle: 'para continuar' } },
+  signUp: { ...ptBR.signUp, start: { ...ptBR.signUp?.start, subtitle: 'para criar a sua conta' } },
+};
 
 /** Estado de configuração pendente: sem a chave o app não pode autenticar ninguém. */
 function MissingClerkKey() {
@@ -43,7 +58,10 @@ if (!root) throw new Error('Elemento #root não encontrado.');
 createRoot(root).render(
   <StrictMode>
     {publishableKey ? (
-      <ClerkProvider publishableKey={publishableKey}>
+      // `localization`: o cartão do Clerk é a peça mais visível da tela de
+      // entrada e vinha inteiro em inglês, num app cuja convenção é interface
+      // em português (CLAUDE.md). Traduz rótulos, erros e e-mails do fluxo.
+      <ClerkProvider publishableKey={publishableKey} localization={traducao}>
         <AuthenticatedApp />
       </ClerkProvider>
     ) : (

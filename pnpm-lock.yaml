@@ -11,6 +11,9 @@ importers:
       '@clerk/backend':
         specifier: ^3.15.0
         version: 3.15.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@clerk/localizations':
+        specifier: ^4.13.10
+        version: 4.13.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@clerk/react':
         specifier: ^6.12.10
         version: 6.12.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -41,6 +44,9 @@ importers:
       mermaid:
         specifier: ^11.16.0
         version: 11.16.0
+      ogl:
+        specifier: ^1.0.11
+        version: 1.0.11
       react:
         specifier: ^19.1.1
         version: 19.2.8
@@ -233,6 +239,10 @@ packages:
 
   '@clerk/backend@3.15.0':
     resolution: {integrity: sha512-m8/X0hAjX9HyBD0IdfIFIxP1fbbSvnq5DB6mPLeIc53Ya9XCLn/hlQkaIM8pobKsM/jquRt9DQLT9IvV6z6bFQ==}
+    engines: {node: '>=20.9.0'}
+
+  '@clerk/localizations@4.13.10':
+    resolution: {integrity: sha512-KVZhFdVDzzJ7imNwnK6N5Eq1gz+Ntoz1HOCVyop46O4Tc0SSIulKGEfMJYXn5U+68vdk/5mbC7ZSGYS7IvGpmA==}
     engines: {node: '>=20.9.0'}
 
   '@clerk/react@6.12.10':
@@ -1763,6 +1773,9 @@ packages:
     resolution: {integrity: sha512-wRNIrw4DmVLKQlbgOMdkMx27Wrpzes2hh5Jtbi2bjPd+4wJstWIqP5A+lscnqbm0xxmT5Bpg8Lec5ItEBwx6BQ==}
     engines: {node: '>=18'}
 
+  ogl@1.0.11:
+    resolution: {integrity: sha512-kUpC154AFfxi16pmZUK4jk3J+8zxwTWGPo03EoYA8QPbzikHoaC82n6pNTbd+oEaJonaE8aPWBlX7ad9zrqLsA==}
+
   onetime@7.0.0:
     resolution: {integrity: sha512-VXJjc87FScF88uafS3JllDgvAm+c/Slfz06lorj2uAY34rlUu0Nt+v8wreiImcrgAjjIHp1rXpTDlLOGw29WwQ==}
     engines: {node: '>=18'}
@@ -2385,6 +2398,13 @@ snapshots:
       '@clerk/shared': 4.25.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       standardwebhooks: 1.0.0
       tslib: 2.8.1
+    transitivePeerDependencies:
+      - react
+      - react-dom
+
+  '@clerk/localizations@4.13.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      '@clerk/shared': 4.25.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
     transitivePeerDependencies:
       - react
       - react-dom
@@ -4021,6 +4041,8 @@ snapshots:
   nanoid@3.3.17: {}
 
   node-releases@2.0.51: {}
+
+  ogl@1.0.11: {}
 
   onetime@7.0.0:
     dependencies:

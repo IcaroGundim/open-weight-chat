@@ -1953,7 +1953,9 @@ kbd {
   color: var(--sidebar-ink);
   display: flex;
   align-items: center;
-  padding: 56px clamp(28px, 5vw, 80px);
+  /* O topo reserva a altura da marca: ela é absoluta e não empurra nada, e
+     sem essa folga o texto centralizado sobe por baixo dela em telas baixas. */
+  padding: 190px clamp(28px, 5vw, 80px) 56px;
   position: relative;
   overflow: hidden;
   --fui-font-sans: var(--sans);
@@ -1982,6 +1984,14 @@ kbd {
   --fui-card-stat-border: var(--sidebar-rule);
   --fui-card-stat-shadow: none;
 }
+/* Tela baixa: a marca encolhe e a reserva acompanha, para o painel caber
+   sem precisar esconder o medidor. */
+@media (max-height: 780px) {
+  .login-panel { padding-top: 148px; }
+  .login-marca { top: 32px; }
+  .login-marca pre { font-size: 12px; }
+}
+
 /* Textura de ruído sutil (mesma técnica do hermes-agent.nousresearch.com):
    um SVG de ruído fractal em blend screen, sem gradiente e sem peso. */
 .login-panel::after {
@@ -2000,118 +2010,137 @@ kbd {
   position: relative;
   z-index: 1;
 }
-.login-brand {
-  font: 700 15px/1.2 var(--display);
-  color: var(--sidebar-wine);
-  margin: 0 0 24px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Marca em ASCII, ancorada no canto do painel — fora da coluna centralizada,
+   como assinatura da tela. Mono porque é desenho feito de caracteres; a
+   entrelinha fecha em 1 para as barras se encontrarem entre as fileiras.
+   O `left` repete o padding do painel para alinhar com a régua da coluna. */
+.login-marca {
+  position: absolute;
+  top: 44px;
+  left: clamp(28px, 5vw, 80px);
+  z-index: 1;
+  color: var(--sidebar-ink);
+  pointer-events: none;
 }
+.login-marca pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1;
+  white-space: pre;
+}
+/* O brilho é feito em DUAS camadas, e isso é decisão de desempenho, não de
+   estilo. A primeira versão animava o próprio `text-shadow` — quatro halos
+   com raio de até 92px, variando a cada quadro. `text-shadow` é pintado na
+   CPU e não sobe para a GPU: animá-lo invalida e re-rasteriza o bloco inteiro
+   a cada quadro, e a página travava.
+   Agora a sombra é ESTÁTICA nas duas camadas, e só a `opacity` da de cima
+   anima — opacity é composta na GPU, então o quadro sai sem repintura. */
+.login-marca-arte {
+  position: relative;
+  text-shadow:
+    0 0 2px color-mix(in srgb, var(--sidebar-ink) 90%, transparent),
+    0 0 10px color-mix(in srgb, var(--sidebar-wine) 55%, transparent);
+}
+/* Só o halo: texto transparente, sombra forte. `text-shadow` desenha a partir
+   do contorno do glifo, então a cor de preenchimento pode sumir. */
+.login-marca-halo {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  text-shadow:
+    0 0 6px color-mix(in srgb, var(--sidebar-ink) 95%, transparent),
+    0 0 20px color-mix(in srgb, var(--sidebar-wine) 100%, transparent),
+    0 0 46px color-mix(in srgb, var(--sidebar-wine) 70%, transparent);
+  animation: marca-bloom 3.2s ease-in-out infinite;
+  will-change: opacity;
+}
+/* Keyframe de folha: as chaves globais de movimento reduzido já o congelam —
+   ao contrário da chuva, que é JS e precisa de guarda própria. */
+@keyframes marca-bloom {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* Título e subtítulo: uma ideia só, colados; o respiro fica entre os blocos,
+   não dentro deles. */
+.login-bloco-titulo { margin: 0 0 36px; }
 .login-panel-title {
   font: 500 clamp(30px, 3.6vw, 44px)/1.05 var(--display);
   color: var(--sidebar-ink);
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   max-width: 16ch;
 }
 .login-panel-text {
   color: var(--sidebar-ink-2);
   font-size: 15px;
   line-height: 1.55;
-  margin: 0 0 32px;
+  margin: 0;
   max-width: 46ch;
 }
 
-/* Prévia viva do produto (§3.3, §12): mensagem, raciocínio, custo medido e
-   campo de entrada com o feixe animado. Substituiu a lista de recursos e a
-   ficha estática — os três argumentos aparecem funcionando em vez de
-   descritos. Os componentes vêm da @usefragments/ui; o que está aqui é só o
-   ritmo entre eles e o que os tokens --fui-* do painel não alcançam. */
-.login-preview {
-  margin: 0 0 32px;
-  display: grid;
-  gap: 10px;
-}
-/* Ilustração: nada aqui recebe foco nem clique. O atributo `inert` no JSX já
-   tira do teclado; isto cobre o ponteiro e o cursor de texto. */
-.login-preview,
-.login-preview * {
+/* Campo de chuva ASCII (Originkit) — o fundo do painel de marca. Fica atrás
+   de tudo; o conteúdo sobe com z-index no .login-panel-inner. */
+.login-chuva {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   pointer-events: none;
-  user-select: none;
 }
-.login-preview-message {
-  font-size: 14px;
-  line-height: 1.5;
-}
-.login-preview-thinking {
-  margin: 2px 0;
-  display: grid;
-  gap: 6px;
-}
-.login-preview-thinking-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  font-size: 14px;
-  color: var(--sidebar-ink-2);
+/* Véu sólido sobre a chuva. Não é estética: é o que devolve o texto ao mesmo
+   par tinta/fundo que `pnpm design` verifica (§10). Sobre a animação crua, o
+   contraste variaria quadro a quadro e nenhuma medição valeria. */
+.login-veu {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--sidebar-bg) 58%, transparent);
 }
 
-/* Custo — o argumento central da bancada. Mono e tabular porque é valor
-   medido (§5.3), e em vinho porque custo é sinalização (§4.4). */
-.login-preview-cost {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 2px 0 6px;
-  padding: 0 2px;
-  font-size: 13px;
-  color: var(--sidebar-ink-2);
+/* Medidor — a tese numa peça só (§7.4). Mono e tabular porque é valor
+   medido (§5.3); vinho porque custo é sinalização (§4.4). */
+.login-medidor {
+  margin: 0 0 32px;
+  padding: 18px 20px;
+  border: 1px solid var(--sidebar-rule);
+  border-radius: var(--r-3);
+  background: color-mix(in srgb, var(--sidebar-bg) 70%, transparent);
 }
-.login-preview-cost strong {
+.login-medidor-rotulo {
+  margin: 0;
+  color: var(--sidebar-ink-2);
+  font-size: 13px;
+}
+.login-medidor-valor {
+  margin: 6px 0 0;
   color: var(--sidebar-wine);
+  font-size: 30px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  line-height: 1.1;
 }
-
-/* O feixe cônico da biblioteca é invisível por construção: o componente tem
-   `overflow: hidden` e uma borda sólida de 1px, e o anel por onde o gradiente
-   passa é justamente o que essa borda cobre. Deixar a borda transparente
-   devolve o anel ao feixe; a cor de base atrás do gradiente mantém a caixa
-   desenhada nos trechos do giro em que o feixe não está passando. */
-.login-preview-prompt {
-  font-size: 14px;
-  border-color: transparent;
-}
-.login-preview-prompt::before {
-  background-color: var(--sidebar-rule);
-  opacity: 1;
-}
-/* O anel de 1px que a biblioteca deixa é fino demais para o feixe registrar;
-   2px é o mínimo em que ele se lê sem virar moldura. */
-.login-preview-prompt::after {
-  inset: 2px;
-}
-.login-preview-model {
+.login-medidor-nota {
+  margin: 10px 0 0;
   color: var(--sidebar-ink-2);
   font-size: 13px;
-}
-.login-preview-ctx {
-  color: var(--sidebar-ink-2);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
 }
 
 /* Chips de provedores — Badge variant="outline" da @usefragments/ui, com a
  * borda e o texto vestidos pelos tokens --fui-* logo abaixo. */
+.login-rodape {
+  margin: 36px 0 0;
+  padding: 20px 0 0;
+  border-top: 1px solid var(--sidebar-rule);
+}
 .login-providers {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   list-style: none;
   padding: 0;
-  margin: 0 0 32px;
+  margin: 0 0 14px;
 }
 .login-panel-foot {
   font-size: 13px;
@@ -2139,11 +2168,15 @@ kbd {
   font-size: 13px;
   margin: 18px 0 0;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  /* O texto tem duas linhas; alinhar pelo topo mantém o ícone junto da
+     primeira, em vez de flutuar no meio do parágrafo. */
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.45;
 }
-.login-hint-arrow {
+.login-hint-icone {
   flex: none;
+  margin-top: 2px;
   color: var(--wine);
 }
 .login-seal {
@@ -2265,6 +2298,11 @@ kbd {
   }
   .login-panel {
     padding: 32px 24px 24px;
+    /* O painel é flex; com a marca de volta ao fluxo, sem trocar o eixo ela
+       vira um item de LINHA e empurra a coluna de texto para o lado. */
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
   }
   .login-panel-inner {
     max-width: none;
@@ -2272,10 +2310,16 @@ kbd {
   .login-panel-text {
     margin-bottom: 20px;
   }
-  /* Empilhado, o painel vira cabeçalho do cartão de acesso: a prévia sai
+  /* Empilhado, o painel vira cabeçalho do cartão de acesso: o medidor sai
      para o formulário não nascer abaixo da dobra. */
-  .login-preview {
+  .login-medidor {
     display: none;
+  }
+  /* A marca volta ao fluxo: em coluna única, um elemento absoluto no canto
+     cairia por cima do título. */
+  .login-marca {
+    position: static;
+    margin: 0 0 24px;
   }
   .login-providers {
     margin-bottom: 12px;

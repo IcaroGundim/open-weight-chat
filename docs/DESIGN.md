@@ -45,7 +45,7 @@ Isto não é um app de conversa de consumo. É uma **bancada com medidor**: voc�
 | Numeração decorativa de itens (`01`, `02`, `03`) | Decoração sem função |
 | Texto abaixo de 12px | Piso de legibilidade |
 | Emoji na interface | — |
-| Sombra colorida, glassmorphism, `backdrop-filter` | — |
+| ~~Sombra colorida~~, glassmorphism, `backdrop-filter` | Glassmorphism e `backdrop-filter` seguem fora. **Sombra colorida revogada em 06/08/2026 — ver §3.3.** |
 | `window.alert` / `prompt` / `confirm` | Diálogo nativo é o tell mais alto de UI inacabada |
 | Cor literal fora dos tokens | Se não é variável, não entra (exceção única em §9.3) |
 | ~~Framework de CSS ou biblioteca de componentes~~ | **Revogado em 05/08/2026 — ver §3.3** |
@@ -75,6 +75,8 @@ O motivo é de produto, não de estética: a tela de login é o primeiro contato
 3. **A §13.5 não mudou.** Se a tela ficaria idêntica em qualquer outro app de chat, ela ainda não tem decisão dentro.
 
 Escopo inicial: a tela de login.
+
+**Estendido em 06/08/2026 à sombra colorida, no brilho da marca da tela de login.** A marca em ASCII fica sobre um campo de chuva em movimento; um halo em `text-shadow` a separa do fundo sem precisar de caixa nem de peso tipográfico extra — é destaque com função, não brilho decorativo. Vale ali e no que a §3.3 já cobre; `--shadow` continua sendo a única sombra do resto do sistema (§6.3).
 
 **Estendido em 06/08/2026 ao seletor de modelo do chat**, com motivo próprio: um provedor BYOK real devolve cerca de 400 modelos, e um `<select>` nativo com essa lista é inutilizável. O `Combobox` traz busca, navegação por teclado e papéis ARIA prontos da Base UI — resolver isso à mão custaria mais e acertaria menos. Os componentes dentro do chat são vestidos pelo bloco `--fui-*` em `.chat-app`, do mesmo modo que os do painel de login.
 
@@ -352,6 +354,7 @@ O que cada escolha substituiu, e por quê. Serve para não refazer o caminho.
 | `<pre>` com padding somado ao do `<code>` | `padding: 0` no `pre` | 13px + 13px = 26px só no caminho destacado |
 | Lateral `#120E0C` no escuro | Mesmo marrom nos dois temas | Ela sumia contra o canvas — ver §4.3 |
 | Prosa e código ambos em 74ch | Prosa em 72ch, código e tabelas em largura cheia | Estreitar código não ajuda ninguém a ler |
+| Marca da tela de login como linha de texto com ícone | Arte ASCII no canto, com halo | A tela virou um campo de chuva ASCII; a marca passa a falar a mesma língua — ver §3.3 |
 | Ficha de modelo estática na tela de login | Prévia viva do produto: mensagem, raciocínio e campo de entrada com feixe | Descrever a bancada convence menos que mostrá-la funcionando — ver §3.3 |
 | Biblioteca de componentes e gradiente proibidos | `@usefragments/ui` permitido, vestido com os tokens daqui | Decisão de produto de 05/08/2026: impacto no primeiro contato; a Base UI ainda dá acessibilidade de graça — ver §3.3 |
 
