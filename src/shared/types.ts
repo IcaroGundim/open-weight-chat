@@ -41,8 +41,14 @@ export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
  *
  * `off` pede para suprimir o raciocínio; onde o provedor não sabe desligar,
  * o mapeamento cai no menor esforço possível (ver `src/server/effort.ts`).
+ *
+ * `xhigh` e `max` são degraus acima de `high` que a OpenRouter declara em
+ * `supported_efforts` — 60 e 41 modelos do catálogo dela, respectivamente. Não
+ * existem na convenção da OpenAI (`minimal|low|medium|high`), e por isso o
+ * mapeamento os fecha em `high` nos outros dialetos, em vez de deixar o 400
+ * derrubar tudo para o padrão do provedor.
  */
-export const EffortLevelSchema = z.enum(['auto', 'off', 'low', 'medium', 'high']);
+export const EffortLevelSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 
 export const ArtifactKindSchema = z.enum(['markdown', 'code', 'svg', 'mermaid']);

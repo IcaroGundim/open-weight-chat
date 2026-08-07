@@ -3,9 +3,9 @@ export type ThemeMode = 'light' | 'dark';
 export type DensityMode = 'comfortable' | 'compact';
 
 /** Espelha EffortLevelSchema de shared/types.ts. */
-export type EffortLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+export type EffortLevel = 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-export const EFFORT_LEVELS: EffortLevel[] = ['auto', 'off', 'low', 'medium', 'high'];
+export const EFFORT_LEVELS: EffortLevel[] = ['auto', 'off', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 /**
  * Rótulos e explicações dos níveis, num lugar só: o seletor do cabeçalho e a
@@ -18,6 +18,8 @@ export const EFFORT_LABEL: Record<EffortLevel, string> = {
   low: 'Baixo',
   medium: 'Médio',
   high: 'Alto',
+  xhigh: 'Muito alto',
+  max: 'Máximo',
 };
 
 export const EFFORT_HINT: Record<EffortLevel, string> = {
@@ -26,6 +28,8 @@ export const EFFORT_HINT: Record<EffortLevel, string> = {
   low: 'Menos raciocínio: respostas mais rápidas e mais baratas.',
   medium: 'Equilíbrio entre profundidade e custo.',
   high: 'Mais raciocínio: melhor em problemas difíceis, e mais caro.',
+  xhigh: 'Um degrau acima do Alto. Onde o modelo não oferecer, vira Alto.',
+  max: 'O teto que o modelo permitir. Onde não existir, vira Alto.',
 };
 
 export function isEffortLevel(value: unknown): value is EffortLevel {

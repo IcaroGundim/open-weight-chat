@@ -790,35 +790,54 @@ kbd {
    casca. Mais estreito porque os rótulos são curtos e a decisão é secundária
    à do modelo: é quanto pensar, não quem pensa. O ícone à esquerda substitui
    um rótulo visível, que roubaria largura do cabeçalho. */
-.effort-picker { position: relative; display: block; min-width: 132px; }
-.effort-picker select {
-  appearance: none;
-  width: 100%;
+/* Nível de raciocínio — Select da @usefragments/ui (DESIGN.md §3.3). Cinco
+   opções fixas, então Select e não Combobox: busca aqui seria cerimônia.
+   O `button` no seletor não é enfeite: `[class*="trigger"]` sozinho casa
+   também com `_triggerIcon_`, e a borda do controle acabava desenhada em
+   volta do ícone do velocímetro. O gatilho é <button>, o ícone é <span>. */
+.effort-picker { min-width: 132px; }
+.effort-picker button[class*="trigger"] {
   height: 34px;
-  padding: 0 30px 0 30px;
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--rule-strong);
   border-radius: var(--r-2);
-  outline: 0;
   font-size: 14px;
-  text-overflow: ellipsis;
 }
-.effort-picker select:hover:not(:disabled) { background: var(--surface); }
-.effort-picker select:disabled { color: var(--ink-3); }
-.effort-picker-icon {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  color: var(--ink-3);
-  pointer-events: none;
+.effort-picker button[class*="trigger"]:hover:not([data-disabled]) { background: var(--surface); }
+/* Foco pela convenção de campo do app (§7), não pelo halo translúcido da
+   biblioteca — o mesmo ajuste feito no seletor de modelo. */
+.effort-picker button[class*="trigger"]:focus-visible {
+  outline: none;
+  border-color: var(--wine);
+  box-shadow: 0 0 0 1px var(--wine);
 }
-.effort-picker-chevron {
-  position: absolute;
-  top: 10px;
-  right: 10px;
+/* A explicação do nível pertence à lista, no momento de escolher. No gatilho
+   ela viraria uma frase inteira dentro de um controle de 34px, porque a
+   biblioteca reaproveita o mesmo conteúdo do item para mostrar o valor. */
+.effort-picker button[class*="trigger"] [class*="hint"] { display: none; }
+
+.effort-picker-menu {
+  min-width: 300px;
+  /* O teto da biblioteca é `viewport-rows(4.5) × row-pitch(32px)` ≈ 158px,
+     medida pensada para itens de UMA linha. Os daqui têm duas (rótulo mais
+     explicação) e os sete níveis somam ~360px, então o excedente virava
+     rolagem escondendo opção.
+     O limite aqui é a janela, não uma contagem de linhas: cabe a lista
+     inteira em qualquer tela normal, e em tela muito baixa a rolagem volta
+     por necessidade — em vez de o menu vazar para fora do visível. */
+  max-block-size: min(78vh, 640px);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-3);
+  background: var(--paper);
+}
+/* Rótulo em cima, explicação embaixo: inline, a frase empurrava o nome. */
+.effort-picker-menu [class*="hint"] {
+  display: block;
+  margin: 2px 0 0;
   color: var(--ink-3);
-  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .cost-badge {
@@ -1147,10 +1166,8 @@ kbd {
 .composer-leading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 /* No compositor o seletor é secundário à caixa de texto: menor que no
    cabeçalho, na altura dos outros controles do rodapé. */
-.composer-leading .effort-picker { min-width: 118px; }
-.composer-leading .effort-picker select { height: 28px; font-size: 13px; }
-.composer-leading .effort-picker-icon,
-.composer-leading .effort-picker-chevron { top: 7px; }
+.composer-leading .effort-picker { min-width: 124px; }
+.composer-leading .effort-picker button[class*="trigger"] { height: 28px; font-size: 13px; }
 .composer-hint { color: var(--ink-3); font-size: 12px; }
 .composer-hint b { color: var(--ink-2); font-weight: 600; }
 .composer-count {

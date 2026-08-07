@@ -56,6 +56,22 @@ const DEFAULT_DIALECT: EffortDialect = 'reasoning_effort';
  */
 const MINIMAL_EFFORT = 'minimal';
 
+/**
+ * Traduz o nível para o vocabulário da convenção OpenAI, que define apenas
+ * `minimal | low | medium | high`.
+ *
+ * `xhigh` e `max` são extensões da OpenRouter. Mandá-las a um endpoint
+ * OpenAI-compatible daria 400, e a retentativa cairia para "sem campo" — ou
+ * seja, para o **padrão do provedor**, que pode ser MENOR do que `high`.
+ * Pedir mais esforço e receber menos seria o pior resultado possível, então
+ * o nível fecha no teto que a convenção conhece.
+ */
+function nivelNaConvencaoOpenAI(level: Exclude<EffortLevel, 'auto'>): string {
+  if (level === 'off') return MINIMAL_EFFORT;
+  if (level === 'xhigh' || level === 'max') return 'high';
+  return level;
+}
+
 export interface EffortRequestParams {
   /** Campos a mesclar no corpo da requisição. */
   readonly body: Record<string, unknown>;
@@ -101,7 +117,7 @@ export function effortRequestParams(
     return { body, keys: ['thinking'] };
   }
 
-  const body = { reasoning_effort: level === 'off' ? MINIMAL_EFFORT : level };
+  const body = { reasoning_effort: nivelNaConvencaoOpenAI(level) };
   return { body, keys: ['reasoning_effort'] };
 }
 

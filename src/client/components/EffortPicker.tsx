@@ -1,5 +1,6 @@
-import { memo } from 'react';
-import { ChevronDown, Gauge } from 'lucide-react';
+import { memo, useMemo } from 'react';
+import { Select } from '@usefragments/ui';
+import { Gauge } from 'lucide-react';
 import { EFFORT_HINT, EFFORT_LABEL, EFFORT_LEVELS, isEffortLevel, type EffortLevel } from '../types';
 
 type EffortPickerProps = {
@@ -11,34 +12,45 @@ type EffortPickerProps = {
 /**
  * Seletor de nível de raciocínio da conversa aberta.
  *
- * Fica ao lado do seletor de modelo porque é a mesma decisão sob dois
- * ângulos: qual modelo pensa e quanto ele pensa. As duas escolhas movem o
- * custo da mensagem, e este app existe para deixar isso visível.
+ * Usa o `Select` da @usefragments/ui, e não o `Combobox` do seletor de
+ * modelo: são cinco opções fixas, e um campo de busca aqui seria cerimônia
+ * sem função.
+ *
+ * O ganho sobre o `<select>` nativo é a explicação de cada nível aparecer
+ * na lista, no momento de escolher. Antes ela existia só como `title` do
+ * controle inteiro — ou seja, descrevia o nível já escolhido, que é
+ * exatamente quando não se precisa mais dela.
  */
 export const EffortPicker = memo(function EffortPicker({
   value,
   onChange,
   disabled = false,
 }: EffortPickerProps) {
+  const opcoes = useMemo(
+    () => EFFORT_LEVELS.map((level) => ({
+      value: level,
+      label: EFFORT_LABEL[level],
+      hint: EFFORT_HINT[level],
+    })),
+    [],
+  );
+
   return (
-    <label className="effort-picker" title={EFFORT_HINT[value]}>
-      <span className="sr-only">Nível de raciocínio</span>
-      <Gauge className="effort-picker-icon" size={14} aria-hidden="true" />
-      <select
-        value={value}
-        onChange={(event) => {
-          if (isEffortLevel(event.target.value)) onChange(event.target.value);
-        }}
-        disabled={disabled}
+    <Select
+      className="effort-picker"
+      value={value}
+      onValueChange={(escolhido) => {
+        if (isEffortLevel(escolhido)) onChange(escolhido);
+      }}
+      disabled={disabled}
+      size="sm"
+      options={opcoes}
+    >
+      <Select.Trigger
         aria-label="Nível de raciocínio"
-      >
-        {EFFORT_LEVELS.map((level) => (
-          <option key={level} value={level}>
-            {EFFORT_LABEL[level]}
-          </option>
-        ))}
-      </select>
-      <ChevronDown className="effort-picker-chevron" size={14} aria-hidden="true" />
-    </label>
+        icon={<Gauge size={14} strokeWidth={2} aria-hidden="true" />}
+      />
+      <Select.Content className="effort-picker-menu" />
+    </Select>
   );
 });
