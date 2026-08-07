@@ -46,6 +46,28 @@ export interface SearchScanner {
   end(): SearchScannerEvent[];
 }
 
+/**
+ * Scanner que não procura nada: entrega o texto como veio.
+ *
+ * Existe porque procurar `<search>` sem ter busca externa configurada só pode
+ * dar falso positivo. O marcador é uma convenção que este servidor **pede** ao
+ * modelo no prompt; sem esse pedido, um `<search>` no texto é o modelo
+ * *falando sobre* buscar — e a falha concreta que motivou isto: com a busca
+ * nativa da OpenRouter ligada, o modelo escreveu "eu usaria
+ * `<search>preço do café</search>`, mas já tenho a resposta", e o scanner
+ * cortou a mensagem ali, jogou fora o resto e ainda colou um "Limite de 3
+ * buscas por resposta atingido" que não fazia sentido nenhum.
+ *
+ * Vale também para quem não configurou busca alguma, que é o caso mais comum:
+ * antes disto, qualquer resposta que mencionasse o marcador era truncada.
+ */
+export function createPassthroughScanner(): SearchScanner {
+  return {
+    push: (chunk) => (chunk ? [{ kind: 'text', text: chunk }] : []),
+    end: () => [],
+  };
+}
+
 export function createSearchScanner(): SearchScanner {
   let buffer = '';
 

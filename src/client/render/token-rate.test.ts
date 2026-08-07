@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { finalRate, gaugeArc, liveRate, needleAngle, scaleFor, trimSamples } from './token-rate';
+import { JANELA_MS, finalRate, liveRate, trimSamples } from './token-rate';
 
 describe('velocidade ao vivo', () => {
   it('mede pela janela deslizante, não pela média desde o início', () => {
@@ -51,37 +51,4 @@ describe('velocidade final', () => {
   });
 });
 
-describe('escala', () => {
-  it('sobe em degraus conforme a velocidade', () => {
-    // Escala fixa não serve: local faz 15 tok/s, endpoint rápido passa de 200.
-    expect(scaleFor(12)).toBe(25);
-    expect(scaleFor(80)).toBe(100);
-    expect(scaleFor(350)).toBe(400);
-  });
 
-  it('nunca desce durante o turno', () => {
-    // Se descesse, o ponteiro andaria para trás com velocidade constante.
-    expect(scaleFor(10, 200)).toBe(200);
-  });
-
-  it('satura no último degrau em vez de estourar', () => {
-    expect(scaleFor(5_000)).toBe(800);
-  });
-});
-
-describe('ponteiro', () => {
-  it('vai de -120° a +120° ao longo da escala', () => {
-    expect(needleAngle(0, 100)).toBe(-120);
-    expect(needleAngle(50, 100)).toBe(0);
-    expect(needleAngle(100, 100)).toBe(120);
-  });
-
-  it('não passa dos limites do arco', () => {
-    expect(needleAngle(500, 100)).toBe(120);
-    expect(needleAngle(-5, 100)).toBe(-120);
-  });
-
-  it('o arco é um caminho SVG válido', () => {
-    expect(gaugeArc(30, 30, 22, -120, 120)).toMatch(/^M [\d.-]+ [\d.-]+ A 22 22 0 [01] 1 [\d.-]+ [\d.-]+$/u);
-  });
-});

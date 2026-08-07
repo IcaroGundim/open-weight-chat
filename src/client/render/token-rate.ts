@@ -79,35 +79,3 @@ export function finalRate(completionTokens: number, elapsedMs: number): number |
   if (!Number.isFinite(elapsedMs) || elapsedMs < 500) return null;
   return (completionTokens / elapsedMs) * 1000;
 }
-
-/**
- * Fim da escala do velocímetro.
- *
- * Escala fixa não serve: um modelo local faz 15 tok/s e um endpoint rápido
- * passa de 200, e um ponteiro colado no fim ou parado no começo não informa
- * nada. A escala sobe em degraus — e só sobe, nunca desce durante o turno,
- * senão o ponteiro andaria para trás com a velocidade constante.
- */
-const DEGRAUS = [25, 50, 100, 200, 400, 800];
-
-export function scaleFor(rate: number, escalaAtual = 0): number {
-  const necessaria = DEGRAUS.find((degrau) => rate <= degrau * 0.92) ?? DEGRAUS[DEGRAUS.length - 1];
-  return Math.max(necessaria, escalaAtual);
-}
-
-/** Ângulo do ponteiro no arco, em graus. O arco vai de -120° a +120°. */
-export function needleAngle(rate: number, escala: number): number {
-  const fracao = Math.max(0, Math.min(1, rate / escala));
-  return -120 + fracao * 240;
-}
-
-/** Arco do velocímetro como caminho SVG. */
-export function gaugeArc(cx: number, cy: number, raio: number, deGraus: number, ateGraus: number): string {
-  const rad = (graus: number) => ((graus - 90) * Math.PI) / 180;
-  const x1 = cx + raio * Math.cos(rad(deGraus));
-  const y1 = cy + raio * Math.sin(rad(deGraus));
-  const x2 = cx + raio * Math.cos(rad(ateGraus));
-  const y2 = cy + raio * Math.sin(rad(ateGraus));
-  const grande = Math.abs(ateGraus - deGraus) > 180 ? 1 : 0;
-  return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${raio} ${raio} 0 ${grande} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
-}

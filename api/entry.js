@@ -4267,6 +4267,12 @@ function suffixThatCanStart2(value) {
   }
   return 0;
 }
+function createPassthroughScanner() {
+  return {
+    push: (chunk) => chunk ? [{ kind: "text", text: chunk }] : [],
+    end: () => []
+  };
+}
 function createSearchScanner() {
   let buffer = "";
   const drenar = (events) => {
@@ -6410,9 +6416,10 @@ ${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
                   content: handoffMessage("revisao", estimateTokens(materialScience) > Math.floor(selection.model.ctx * 0.5) ? materialScience.slice(0, Math.floor(selection.model.ctx * 0.5) * 4) : materialScience)
                 }] : []
               ] : [...context.messages];
+              const citacoes = /* @__PURE__ */ new Map();
               for (let round = 1; round <= MAX_SEARCH_ROUNDS + 1; round += 1) {
                 await trace(stream, "chat", `round ${round} iniciado`, `${mensagens.length} mensagens no contexto`);
-                const scanner = createSearchScanner();
+                const scanner = buscaExterna ? createSearchScanner() : createPassthroughScanner();
                 let consultaPedida = null;
                 let textoDoRound = "";
                 let usoDoRound = null;
@@ -6467,25 +6474,25 @@ ${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
                     }
                     await persistPartial();
                   } else if (event.kind === "citations") {
-                    await emit(stream, {
-                      type: "search_end",
-                      query: "busca na web (OpenRouter)",
-                      round: 1,
-                      results: event.citations.map((citacao) => ({
-                        title: citacao.title,
-                        url: citacao.url,
-                        snippet: citacao.snippet
-                      })),
-                      failure: null,
-                      conversationId: conversation.id,
-                      messageId: assistant.id
-                    });
+                    for (const citacao of event.citations) citacoes.set(citacao.url, citacao);
                   } else if (event.kind === "usage") {
                     usoDoRound = event.usage;
                     rawUsage = event.usage;
                   } else if (event.kind === "finish") {
                     finishReason = event.finishReason;
                   }
+                }
+                if (citacoes.size > 0) {
+                  await emit(stream, {
+                    type: "search_end",
+                    query: "busca na web (OpenRouter)",
+                    round,
+                    results: [...citacoes.values()],
+                    failure: null,
+                    conversationId: conversation.id,
+                    messageId: assistant.id
+                  });
+                  citacoes.clear();
                 }
                 usoPorRound.push(usoDoRound);
                 if (consultaPedida === null) {

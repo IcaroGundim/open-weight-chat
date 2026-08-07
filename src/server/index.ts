@@ -59,7 +59,7 @@ import {
   runSearch,
   toSearchSettingsResponse,
 } from './search';
-import { createSearchScanner, searchSystemPrompt } from './search/protocol';
+import { createPassthroughScanner, createSearchScanner, searchSystemPrompt } from './search/protocol';
 import { handoffMessage, scienceChain } from './science/levels';
 import { analyzeAttachment, decodeAttachment, documentPromptBlock, imageDataUrl } from './attachments';
 import { generatedSpreadsheetFromArtifact, spreadsheetPromptBlock, workbookSheetToCsv, workbookToXlsx } from './spreadsheets';
@@ -1682,11 +1682,16 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                   }] : []),
                 ]
                 : [...context.messages];
+              // Fontes citadas pela busca nativa do provedor, do turno inteiro.
+              // Viram um cartão só, no fim — ver o tratamento de `citations`.
+              const citacoes = new Map<string, { title: string; url: string; snippet: string }>();
               for (let round = 1; round <= MAX_SEARCH_ROUNDS + 1; round += 1) {
                 // Do round, não do turno: uma busca encerra este round sem
                 // cancelar a resposta inteira.
                 await trace(stream, 'chat', `round ${round} iniciado`, `${mensagens.length} mensagens no contexto`);
-                const scanner = createSearchScanner();
+                // Só procura o marcador quem pediu o marcador. Ver
+                // createPassthroughScanner.
+                const scanner = buscaExterna ? createSearchScanner() : createPassthroughScanner();
                 let consultaPedida: string | null = null;
                 let textoDoRound = '';
                 let usoDoRound: Record<string, unknown> | null = null;
@@ -1755,30 +1760,36 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                     }
                     await persistPartial();
                   } else if (event.kind === 'citations') {
-                    // Reaproveita o cartão de busca da interface: para quem lê,
-                    // "o modelo consultou estas fontes" é a mesma informação,
-                    // independentemente de quem foi até a web. A consulta não
-                    // vem nas anotações — a OpenRouter não a expõe — e dizer
-                    // "busca na web" é melhor do que inventar um termo.
-                    await emit(stream, {
-                      type: 'search_end',
-                      query: 'busca na web (OpenRouter)',
-                      round: 1,
-                      results: event.citations.map((citacao) => ({
-                        title: citacao.title,
-                        url: citacao.url,
-                        snippet: citacao.snippet,
-                      })),
-                      failure: null,
-                      conversationId: conversation.id,
-                      messageId: assistant.id,
-                    });
+                    // Acumula, não emite. A OpenRouter repete a lista inteira
+                    // de anotações a cada chunk, e emitir por chunk empilhava
+                    // um cartão idêntico por pedaço da resposta — três, no
+                    // caso que reproduzimos, para uma busca só. A chave é a
+                    // URL: é o que identifica a fonte para quem lê.
+                    for (const citacao of event.citations) citacoes.set(citacao.url, citacao);
                   } else if (event.kind === 'usage') {
                     usoDoRound = event.usage;
                     rawUsage = event.usage;
                   } else if (event.kind === 'finish') {
                     finishReason = event.finishReason;
                   }
+                }
+
+                if (citacoes.size > 0) {
+                  // Reaproveita o cartão de busca da interface: para quem lê,
+                  // "o modelo consultou estas fontes" é a mesma informação,
+                  // independentemente de quem foi até a web. A consulta não vem
+                  // nas anotações — a OpenRouter não a expõe — e dizer "busca na
+                  // web" é melhor do que inventar um termo que ela não usou.
+                  await emit(stream, {
+                    type: 'search_end',
+                    query: 'busca na web (OpenRouter)',
+                    round,
+                    results: [...citacoes.values()],
+                    failure: null,
+                    conversationId: conversation.id,
+                    messageId: assistant.id,
+                  });
+                  citacoes.clear();
                 }
 
                 usoPorRound.push(usoDoRound);

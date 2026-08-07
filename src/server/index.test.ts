@@ -328,6 +328,63 @@ describe('Hono API multiusuário', () => {
     expect(corpos[0]).not.toContain('<search>');
   });
 
+  /**
+   * A OpenRouter repete a lista inteira de anotações a cada chunk. Emitir um
+   * cartão por chunk empilhava o mesmo resultado várias vezes na mensagem.
+   */
+  it('as citações repetidas viram um cartão só', async () => {
+    process.env.ALLOW_ENV_API_KEYS = 'true';
+    process.env.OPENROUTER_API_KEY = 'chave-de-teste';
+    const anotacao = '{"type":"url_citation","url_citation":{"url":"https://a.com","title":"A","content":"x"}}';
+    const app = appFor(database, USER_A, async () => new Response(
+      `data: {"choices":[{"delta":{"content":"o preço ","annotations":[${anotacao}]}}]}\n\n`
+      + `data: {"choices":[{"delta":{"content":"subiu.","annotations":[${anotacao}]}}]}\n\n`
+      + `data: {"choices":[{"delta":{},"finish_reason":"stop","message":{"annotations":[${anotacao}]}}]}\n\n`
+      + 'data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":4}}\n\n'
+      + 'data: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } },
+    ));
+    expect((await configurarBusca(app, { backend: 'openrouter', baseURL: undefined })).status).toBe(200);
+
+    const resposta = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody({ providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash' }),
+    });
+    const texto = await resposta.text();
+    expect(texto.split('\n').filter((linha) => linha.includes('"type":"search_end"'))).toHaveLength(1);
+  });
+
+  /**
+   * O marcador é uma convenção que ESTE servidor pede no prompt. Sem esse
+   * pedido, um `<search>` no texto é o modelo *falando sobre* buscar — e
+   * cortar a resposta ali jogava fora o resto e colava um "Limite de 3 buscas"
+   * sem sentido. Vale para a busca nativa e para quem não configurou busca.
+   */
+  it('sem busca externa, um <search> no texto não trunca a resposta', async () => {
+    const app = appFor(database, USER_A, async () => new Response(
+      'data: {"choices":[{"delta":{"content":"Eu usaria "}}]}\n\n'
+      + 'data: {"choices":[{"delta":{"content":"<search>preço do café</search>"}}]}\n\n'
+      + 'data: {"choices":[{"delta":{"content":" mas já sei: subiu 3%."}}]}\n\n'
+      + 'data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":4}}\n\n'
+      + 'data: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } },
+    ));
+
+    const resposta = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
+      body: chatBody(),
+    });
+    const texto = await resposta.text();
+    const entregue = texto.split('\n')
+      .filter((linha) => linha.startsWith('data: ') && linha.includes('"type":"text"'))
+      .map((linha) => (JSON.parse(linha.slice(6)) as { text: string }).text)
+      .join('');
+    expect(entregue).toBe('Eu usaria <search>preço do café</search> mas já sei: subiu 3%.');
+    expect(texto).not.toContain('Limite de');
+  });
+
   it('faz a busca pedida pelo modelo e devolve os resultados para ele responder', async () => {
     const corposDeChat: string[] = [];
     let consultaRecebida: string | null = null;
