@@ -49,11 +49,25 @@ function initialSidebarOpen(): boolean {
   return !window.matchMedia('(max-width: 900px)').matches;
 }
 
+/** Distância do fim, em px, que ainda conta como "colado no fim". */
+const FOLGA_DO_FIM = 120;
+
 export function ChatView() {
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
   const [costOverviewOpen, setCostOverviewOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement>(null);
+  /**
+   * O usuário está colado no fim?
+   *
+   * Enquanto está, a resposta que cresce arrasta a rolagem junto — que é o
+   * comportamento esperado num chat. Assim que ele sobe para reler algo,
+   * para de arrastar. Sem esta trava, o efeito de rolagem disparava a CADA
+   * pedaço do stream, e durante uma resposta longa isso é várias vezes por
+   * segundo: qualquer tentativa de rolar era desfeita em milissegundos, e a
+   * página parecia travada.
+   */
+  const coladoNoFim = useRef(true);
   const theme = useSettingsStore((state) => state.theme);
   const density = useSettingsStore((state) => state.density);
   const reduceMotion = useSettingsStore((state) => state.reduceMotion);
@@ -70,7 +84,7 @@ export function ChatView() {
   const error = useChatStore((state) => state.error);
   const loadModels = useChatStore((state) => state.loadModels);
   const loadConversations = useChatStore((state) => state.loadConversations);
-  const sendMessage = useChatStore((state) => state.sendMessage);
+  const enviarDaStore = useChatStore((state) => state.sendMessage);
   const stopStreaming = useChatStore((state) => state.stopStreaming);
   const setSelectedModel = useChatStore((state) => state.setSelectedModel);
   const setEffort = useChatStore((state) => state.setEffort);
@@ -125,9 +139,47 @@ export function ChatView() {
     if (window.innerWidth >= 900 && window.innerWidth < 1280) setSidebarOpen(false);
   }, [openArtifactSelection, openSpreadsheetId]);
 
+  /**
+   * Enviar recola no fim.
+   *
+   * Quem estava relendo uma mensagem antiga e resolve perguntar quer ver a
+   * resposta chegando — deixar a tela parada lá em cima faria parecer que o
+   * envio não aconteceu.
+   */
+  const sendMessage = useCallback(
+    (...args: Parameters<typeof enviarDaStore>) => {
+      coladoNoFim.current = true;
+      return enviarDaStore(...args);
+    },
+    [enviarDaStore],
+  );
+
+  // Trocar de conversa também recomeça no fim, que é onde está o assunto.
   useEffect(() => {
-    if (!bottomRef.current) return;
-    bottomRef.current.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth', block: 'end' });
+    coladoNoFim.current = true;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    const area = scrollRef.current;
+    if (!area) return;
+    const aoRolar = () => {
+      const distanciaDoFim = area.scrollHeight - area.scrollTop - area.clientHeight;
+      // A folga existe porque a altura muda enquanto o texto chega; exigir
+      // distância zero faria a trava soltar sozinha no meio da geração.
+      coladoNoFim.current = distanciaDoFim <= FOLGA_DO_FIM;
+    };
+    area.addEventListener('scroll', aoRolar, { passive: true });
+    return () => area.removeEventListener('scroll', aoRolar);
+  }, []);
+
+  useEffect(() => {
+    const area = scrollRef.current;
+    if (!area || !coladoNoFim.current) return;
+    // `scrollTop` direto, e não `scrollIntoView`: este rola só o container, é
+    // síncrono e não disputa com a rolagem do usuário. O `smooth` do
+    // `scrollIntoView` anima por centenas de milissegundos e, com um evento
+    // novo a cada pedaço do stream, as animações se atropelavam.
+    area.scrollTop = area.scrollHeight;
   }, [messages, isStreaming]);
 
   useEffect(() => {
@@ -212,7 +264,7 @@ export function ChatView() {
           </div>
         ) : null}
 
-        <section className="message-scroll" aria-live="polite" aria-label="Mensagens da conversa">
+        <section className="message-scroll" ref={scrollRef} aria-live="polite" aria-label="Mensagens da conversa">
           {!activeConversationId ? (
             <div className="welcome-state">
               <div className="welcome-copy">
@@ -246,8 +298,7 @@ export function ChatView() {
           ) : (
             <div className="message-list">
               {messages.map((message) => <MessageBubble key={message.id} message={message} />)}
-              <div ref={bottomRef} />
-            </div>
+                    </div>
           )}
         </section>
 

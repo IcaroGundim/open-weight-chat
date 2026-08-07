@@ -1586,11 +1586,23 @@ body[data-redimensionando] .artifact-resizer-alca { opacity: 1; background: var(
   padding: 8px 28px 36px;
 }
 
+/* Sem `content-visibility: auto` aqui, e a ausência é deliberada.
+ *
+ * Ele pula a renderização do que está fora da tela e usa
+ * `contain-intrinsic-size` como altura de mentirinha. Isso funciona quando o
+ * palpite chega perto do real — e não é o caso: uma mensagem vai de ~60px
+ * (uma linha) a milhares (um artigo do modo Science, um artefato inteiro).
+ * Com 140px de palpite contra 3000px reais, `scrollHeight` é uma soma de
+ * chutes; a barra de rolagem nasce do tamanho errado e o fim da lista muda de
+ * lugar conforme as linhas vão sendo renderizadas. Rolar para baixo vira
+ * perseguir um alvo que recua.
+ *
+ * O custo de tirar é renderizar mensagens fora da tela numa conversa longa. Se
+ * isso pesar, a resposta certa é virtualizar a lista com altura medida, não
+ * voltar a chutar 140px. */
 .message-row {
   padding: 18px 0;
   border-top: 1px solid var(--rule);
-  content-visibility: auto;
-  contain-intrinsic-size: auto 140px;
 }
 .message-row:first-child { border-top: 0; }
 
