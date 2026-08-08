@@ -19,19 +19,29 @@ import {
   type Message,
   type MessageRole,
   type ProviderId,
+  type SkillSelections,
   type Usage,
 } from '../../shared/types';
 import { parseEffortColumn } from '../effort';
-import { ScienceFormatSchema, ScienceLevelSchema } from '../../shared/types';
+import { SkillSelectionsSchema } from '../../shared/types';
 
-/** NULL, valor desconhecido ou coluna ausente caem no estado desligado. */
-function parseScienceLevel(valor: unknown) {
-  const lido = ScienceLevelSchema.safeParse(valor);
-  return lido.success ? lido.data : 'off';
-}
-function parseScienceFormat(valor: unknown) {
-  const lido = ScienceFormatSchema.safeParse(valor);
-  return lido.success ? lido.data : undefined;
+/**
+ * Lê a seleção serializada e mantém conversas antigas de Science funcionais.
+ * Depois da primeira alteração, a conversa é gravada apenas em `skills_json`.
+ */
+function parseSkills(value: unknown, legacyLevel?: unknown, legacyFormat?: unknown): SkillSelections {
+  if (typeof value === 'string') {
+    try {
+      const parsed = SkillSelectionsSchema.safeParse(JSON.parse(value));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // JSON inválido cai no estado seguro abaixo.
+    }
+  }
+  if (legacyLevel != null && legacyLevel !== 'off') {
+    return [{ id: 'science', settings: { format: legacyFormat === 'latex' ? 'latex' : 'markdown' } }];
+  }
+  return [];
 }
 
 const FALLBACK_SCHEMA_SQL = `
@@ -54,7 +64,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   updated_at INTEGER NOT NULL,
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
   science_level TEXT,
-  science_format TEXT
+  science_format TEXT,
+  skills_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
@@ -287,8 +298,7 @@ export interface CreateConversationData {
   modelId: string;
   systemPrompt?: string | null;
   effort?: EffortLevel;
-  scienceLevel?: 'off' | 'basic' | 'intermediate' | 'advanced';
-  scienceFormat?: 'markdown' | 'latex';
+  skills?: SkillSelections;
   createdAt?: number;
 }
 
@@ -298,8 +308,7 @@ export interface UpdateConversationData {
   modelId?: string;
   systemPrompt?: string | null;
   effort?: EffortLevel;
-  scienceLevel?: 'off' | 'basic' | 'intermediate' | 'advanced';
-  scienceFormat?: 'markdown' | 'latex';
+  skills?: SkillSelections;
   archived?: boolean;
 }
 
@@ -482,8 +491,7 @@ function rowToSummary(input: Record<string, unknown>): ConversationSummary {
     modelId: asString(row.model_id),
     systemPrompt: asNullableString(row.system_prompt),
     effort: parseEffortColumn(row.effort),
-    scienceLevel: parseScienceLevel(row.science_level),
-    scienceFormat: parseScienceFormat(row.science_format),
+    skills: parseSkills(row.skills_json, row.science_level, row.science_format),
     createdAt: asNumber(row.created_at),
     updatedAt: asNumber(row.updated_at),
     archived: asBoolean(row.archived),
@@ -545,6 +553,7 @@ export class ChatDatabase {
     this.ensureColumn('conversations', 'effort', 'TEXT');
     this.ensureColumn('conversations', 'science_level', 'TEXT');
     this.ensureColumn('conversations', 'science_format', 'TEXT');
+    this.ensureColumn('conversations', 'skills_json', "TEXT NOT NULL DEFAULT '[]'");
     this.db.exec(loadSchemaSql());
     // Keep external-content FTS consistent with databases created before the triggers existed.
     this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');");
@@ -579,8 +588,8 @@ export class ChatDatabase {
     this.db
       .prepare(
         `INSERT INTO conversations
-          (id, user_id, title, provider_id, model_id, system_prompt, effort, science_level, science_format, created_at, updated_at, archived)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          (id, user_id, title, provider_id, model_id, system_prompt, effort, skills_json, created_at, updated_at, archived)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         id,
@@ -590,8 +599,7 @@ export class ChatDatabase {
         data.modelId,
         data.systemPrompt ?? null,
         data.effort ?? 'auto',
-        data.scienceLevel ?? 'off',
-        data.scienceFormat ?? null,
+        JSON.stringify(data.skills ?? []),
         now,
         now,
       );
@@ -602,7 +610,7 @@ export class ChatDatabase {
     const includeArchived = options.includeArchived ?? false;
     const rows = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.science_level, c.science_format,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.skills_json, c.science_level, c.science_format,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
@@ -619,7 +627,7 @@ export class ChatDatabase {
   getConversation(userId: string, id: string): Conversation | null {
     const summaryRow = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.science_level, c.science_format,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.skills_json, c.science_level, c.science_format,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd
@@ -645,16 +653,15 @@ export class ChatDatabase {
     const modelId = data.modelId ?? current.modelId;
     const systemPrompt = data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt;
     const effort = data.effort ?? current.effort;
-    const scienceLevel = data.scienceLevel ?? current.scienceLevel ?? 'off';
-    const scienceFormat = data.scienceFormat ?? current.scienceFormat ?? null;
+    const skills = data.skills ?? current.skills;
     const archived = data.archived === undefined ? current.archived : data.archived;
     this.db
       .prepare(
         `UPDATE conversations
-            SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, effort = ?, science_level = ?, science_format = ?, archived = ?, updated_at = ?
+            SET title = ?, provider_id = ?, model_id = ?, system_prompt = ?, effort = ?, skills_json = ?, archived = ?, updated_at = ?
           WHERE id = ? AND user_id = ?`,
       )
-      .run(title, providerId, modelId, systemPrompt, effort, scienceLevel, scienceFormat, archived ? 1 : 0, Date.now(), id, userId);
+      .run(title, providerId, modelId, systemPrompt, effort, JSON.stringify(skills), archived ? 1 : 0, Date.now(), id, userId);
     return this.getConversation(userId, id);
   }
 
@@ -1137,7 +1144,7 @@ export class ChatDatabase {
     const ftsQuery = escapeFtsQuery(query);
     const rows = this.db
       .prepare(
-        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.science_level, c.science_format,
+        `SELECT c.id, c.title, c.provider_id, c.model_id, c.system_prompt, c.effort, c.skills_json, c.science_level, c.science_format,
                 c.created_at, c.updated_at, c.archived,
                 COUNT(m.id) AS message_count,
                 COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd

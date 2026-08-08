@@ -210,6 +210,37 @@ Corpo.
     expect(doc.markdown).toContain('$(0,1)$');
   });
 
+  it('não confunde quebra de linha com espaçamento opcional e matemática de bloco', () => {
+    // \\[0.4ex] é um line break de cabeçalho, não o delimitador \\[ que abre
+    // matemática. Confundir os dois faz a prévia engolir tudo até a próxima
+    // fórmula como se fosse uma expressão inválida.
+    const doc = latexToMarkdown(String.raw`
+\begin{document}
+\begin{center}
+{\Large\bfseries A curva de Phillips original}\\[0.4ex]
+{\large Descoberta empírica e mecanismos}
+\end{center}
+\begin{equation}
+g_{w,t} = a + b\,u_t^{-c}
+\end{equation}
+\label{eq:phillips}
+em que \(g_{w,t}\) é a taxa de variação salarial.
+\[
+\frac{\partial g_w}{\partial u} < 0
+\]
+\end{document}`);
+    expect(doc.markdown).toContain('A curva de Phillips original');
+    expect(doc.markdown).toContain('Descoberta empírica e mecanismos');
+    expect(doc.markdown).not.toContain('0.4ex');
+    expect(doc.markdown).not.toContain('{ A curva');
+    expect(doc.markdown).not.toContain('\\label');
+    expect(doc.markdown).toContain('$$\ng_{w,t} = a + b\\,u_t^{-c}\n$$');
+    expect(doc.markdown).toContain('$g_{w,t}$');
+    expect(doc.markdown).toContain('\\frac{\\partial g_w}{\\partial u} < 0');
+    expect(doc.unsupported).not.toContain('\\Large');
+    expect(doc.unsupported).not.toContain('\\bfseries');
+  });
+
   it('mantém o recuo que ele mesmo gera para listas aninhadas', () => {
     // A remoção de recuo não pode comer a indentação da lista interna.
     const doc = latexToMarkdown(String.raw`
@@ -295,6 +326,18 @@ describe('figuras em TikZ', () => {
 });
 
 describe('acentos no estilo antigo do LaTeX', () => {
+  it('decodifica escapes Unicode JSON sem tratá-los como comandos LaTeX', () => {
+    const doc = latexToMarkdown('Assimet\\u00a0trias');
+    expect(doc.markdown).toBe('Assimet\u00a0trias');
+    expect(doc.unsupported).not.toContain('\\u');
+  });
+
+  it('descarta acento breve inválido sem esconder o texto seguinte', () => {
+    const doc = latexToMarkdown(String.raw`estagfla\u e`);
+    expect(doc.markdown).toContain('estagfla e');
+    expect(doc.unsupported).not.toContain('\\u');
+  });
+
   it('traduz as formas com e sem chave', () => {
     // O modelo escreve assim, e sem traduzir a limpeza de comandos comia o
     // acento junto com a letra: "identifica\c{c}\~ao" virava "identifica ao".

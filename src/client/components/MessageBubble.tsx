@@ -71,14 +71,14 @@ function MessageAttachments({ attachments }: { attachments?: Attachment[] }) {
 }
 
 /**
- * Progresso da cadeia Science.
+ * Progresso das skills.
  *
  * Fica guardado NA mensagem, não num estado efêmero: quem reabre a conversa
  * depois precisa saber por quantas mãos aquele texto passou — é o que explica
  * o custo e a extensão dele.
  */
-function ScienceStages({ message }: { message: ChatMessage }) {
-  const estagios = message.scienceStages;
+function SkillStages({ message }: { message: ChatMessage }) {
+  const estagios = message.skillStages;
   if (!estagios || estagios.length === 0) return null;
   return (
     <ol className="science-progresso">
@@ -105,8 +105,8 @@ function ScienceStages({ message }: { message: ChatMessage }) {
  * A rolagem acompanha o fim: um painel de altura fixa que não rola para baixo
  * mostra sempre o começo do texto, que é justamente a parte que já foi lida.
  */
-function ScienceDraft({ message }: { message: ChatMessage }) {
-  const draft = message.scienceDraft;
+function SkillDraft({ message }: { message: ChatMessage }) {
+  const draft = message.skillDraft;
   const corpoRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -127,7 +127,7 @@ function ScienceDraft({ message }: { message: ChatMessage }) {
   // documento inteiro — o aprofundador reescreve tudo com os acréscimos —, a
   // tela mostrava um texto longo sendo escrito três vezes seguidas, sem nada
   // indicando que eram autores diferentes. Parecia um laço.
-  const rotulo = message.scienceStages?.find((estagio) => estagio.index === draft.index)?.label;
+  const rotulo = message.skillStages?.find((estagio) => estagio.index === draft.index)?.label;
   return (
     <details className="science-bastidor" open>
       <summary>
@@ -266,7 +266,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
           </>
         ) : message.content ? (
           <>
-            <ScienceStages message={message} />
+            <SkillStages message={message} />
             <MessageAttachments attachments={message.attachments} />
             <AssistantContent message={message} />
           </>
@@ -274,8 +274,8 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
           <MessageAttachments attachments={message.attachments} />
         ) : isStreaming ? (
           <>
-            <ScienceStages message={message} />
-            <ScienceDraft message={message} />
+            <SkillStages message={message} />
+            <SkillDraft message={message} />
             <AgentOrb activity="pensando" label="Assistente está respondendo" />
           </>
         ) : null}

@@ -1,55 +1,46 @@
-import type { ScienceFormat, ScienceLevel, ScienceRole } from '../../shared/types';
+import type { ScienceSkillFormat, SkillSelection } from '../../shared/types';
+import type { SkillDefinition, SkillStage } from '../skills';
 
 /**
- * Modo Science: uma cadeia de agentes sobre a mesma pergunta.
+ * Skill Science: uma cadeia de agentes para escrita acadêmica.
  *
- * Cada estágio é uma chamada NOVA ao provedor, com prompt de sistema próprio e
- * recebendo o texto do estágio anterior. Não é um prompt gigante pedindo
- * "pesquise, escreva e revise": um modelo que faz tudo numa passagem revisa o
- * que acabou de escrever, e revisar o próprio texto na mesma respiração é
- * justamente o que ninguém faz bem. Separar em chamadas dá ao revisor um texto
- * que ele não escreveu.
- *
- * **O custo é linear no número de agentes.** Nível 3 são cinco chamadas sobre
- * um texto longo, e o texto cresce a cada estágio — a última passagem lê tudo
- * o que veio antes. A interface diz o número de agentes antes de rodar porque
- * essa é a informação que decide a escolha.
+ * O primeiro estágio faz o planejamento; o segundo recebe esse plano e
+ * escreve, revisa e ilustra o documento. Separar planejamento de autoria
+ * impede que a estrutura vire apenas uma introdução improvisada do próprio
+ * texto final.
  */
 
 export interface ScienceStage {
-  readonly role: ScienceRole;
+  readonly stageId: 'planejamento' | 'redacao';
   /** Título curto para a interface mostrar o progresso. */
   readonly label: string;
-  readonly systemPrompt: (formato: ScienceFormat) => string;
-}
-
-export interface ScienceChain {
-  readonly level: Exclude<ScienceLevel, 'off'>;
-  readonly label: string;
-  readonly description: string;
-  readonly stages: readonly ScienceStage[];
+  readonly systemPrompt: (formato: ScienceSkillFormat) => string;
 }
 
 /** Convenções de formato, ditas uma vez e reaproveitadas por todo estágio. */
-function regrasDeFormato(formato: ScienceFormat): string {
+function regrasDeFormato(formato: ScienceSkillFormat): string {
   if (formato === 'latex') {
     return [
       'Escreva em LaTeX, num documento `article` completo: preâmbulo, \\begin{document} e \\end{document}.',
       'Use \\section e \\subsection para a estrutura, o ambiente equation para fórmulas de bloco e $...$ para as de linha.',
       'Citações com \\cite e as referências num thebibliography no fim.',
+      'No preâmbulo, use os pacotes usuais geometry (margens equilibradas), microtype, amsmath, hyperref, booktabs e tikz.',
+      'Abra o documento com título, autoria, data e maketitle; mantenha tipografia, margens, espaçamento e legendas consistentes.',
       'Não use pacotes exóticos: o documento precisa compilar com article, amsmath e hyperref.',
       'Inclua \\usepackage[utf8]{inputenc} e escreva os acentos DIRETO em UTF-8 — "método", "identificação".',
       'Nunca use as formas antigas \\\'e, \\c{c} ou \\~ao: são legado de fonte não-UTF-8 e deixam o texto ilegível fora de um compilador.',
     ].join(' ');
   }
   return [
-    'Escreva em Markdown.',
+    'Escreva em Markdown com apresentação visual clara e profissional: abra com um título de nível 1 e uma introdução curta que situe o leitor.',
     'Use ## e ### para a estrutura, $...$ e $$...$$ para matemática (nunca crase para fórmula) e tabelas do GitHub quando couber.',
+    'Use espaçamento entre seções, tabelas legíveis e destaque moderado para conceitos-chave; não transforme cada frase em uma lista.',
+    'Cada figura precisa de legenda, ser mencionada no corpo do texto e ficar próxima da explicação que ela apoia.',
     'As referências vão numa seção final, com link quando existir.',
   ].join(' ');
 }
 
-/** Instrução comum a todos os que escrevem — o que separa texto acadêmico de resumo. */
+/** Instrução comum a quem produz o documento final. */
 const RIGOR = [
   'Você escreve para um estudante que vai usar este texto para estudar de verdade.',
   'Densidade acima de volume: nada de parágrafo de enrolação, frase de efeito ou repetição do enunciado.',
@@ -57,90 +48,25 @@ const RIGOR = [
   'Defina cada termo técnico na primeira vez que aparecer.',
 ].join(' ');
 
-const PESQUISA: ScienceStage = {
-  role: 'pesquisa',
-  label: 'Levantamento e contexto detalhado',
-  systemPrompt: (formato) => [
-    '# Papel: levantamento e redação',
+const PLANEJAMENTO: ScienceStage = {
+  stageId: 'planejamento',
+  label: 'Estrutura e diretrizes',
+  systemPrompt: () => [
+    '# Papel: planejamento do desenvolvimento',
     '',
-    RIGOR,
+    'Você é o primeiro agente da skill Science. Sua saída será usada por outro agente para escrever o documento final.',
+    '**Não escreva o documento final, não redija parágrafos de entrega e não desenhe ilustrações.** Produza um plano de desenvolvimento profundo e acionável.',
     '',
-    'Sua tarefa é levantar o que se sabe sobre o tema e escrever um contexto DETALHADO sobre ele.',
-    'Comece pelo mapa do assunto — definições, correntes, resultados centrais, controvérsias — e só então escreva.',
-    'Detalhe: derive o que pode ser derivado, dê exemplos concretos, diga as condições em que cada resultado vale',
-    'e explique o passo que um autor apressado pularia por achar óbvio.',
-    'Cubra o tema inteiro, mesmo que de forma ainda desigual: quem vem depois aprofunda e revisa, mas não adivinha o que você deixou de fora.',
-    'Estruture com seções nomeadas pelo conteúdo, nunca por função ("Seção 2", "Desenvolvimento").',
+    'Monte o plano com estas partes:',
+    '1. **Recorte e objetivo.** Delimite o que a resposta deve explicar, o nível de profundidade adequado e as questões centrais.',
+    '2. **Estrutura proposta.** Liste seções e subseções com títulos específicos, em uma ordem didática. Evite títulos genéricos como "Desenvolvimento".',
+    '3. **Tópicos a aprofundar.** Para cada seção, descreva conceitos, mecanismos, argumentos, relações, exemplos, derivações, condições de validade, controvérsias e conexões que o texto final precisa desenvolver profundamente.',
+    '4. **Diretrizes de escrita.** Indique a progressão entre seções, termos que exigem definição, perguntas que o texto precisa responder, evidências a qualificar e armadilhas conceituais a evitar.',
+    '5. **Oportunidades de ilustração.** Sugira pelo menos quatro relações, processos ou comparações que merecem figuras e o que cada figura deve esclarecer — apenas a intenção, sem criar a gravura.',
+    '6. **Apresentação visual.** Indique como título, seções, tabelas, fórmulas, destaques e figuras devem organizar o documento para que ele seja agradável e fácil de consultar.',
     '',
-    '## Estrutura: poucos títulos, parágrafos de tamanho normal',
-    '',
-    'Duas coisas diferentes, e é fácil confundi-las: **menos TÍTULOS não é menos QUEBRAS DE PARÁGRAFO.**',
-    'O texto tem poucas seções e, dentro de cada uma, vários parágrafos de tamanho comum.',
-    '',
-    'Sobre os títulos:',
-    '- No máximo **dois níveis**. Nada de sub-subseção.',
-    '- Cada seção tem **três parágrafos ou mais**. Se tem um só, ela não era uma seção: junte ao texto vizinho.',
-    '- Só abra uma subseção quando o assunto realmente mudar; mudança de aspecto do MESMO assunto é parágrafo novo.',
-    '- Um título a cada dois parágrafos transforma o documento numa lista de tópicos, e a conexão entre as ideias',
-    '  — que é o que se estuda — desaparece nos espaços em branco entre os títulos.',
-    '',
-    'Sobre os parágrafos:',
-    '- Cada parágrafo trata de **uma ideia**, em geral de quatro a oito frases.',
-    '- Passou de umas dez linhas, quase certamente virou dois assuntos: quebre no ponto em que o segundo começa.',
-    '- Bloco enorme e sem respiro é tão ruim de estudar quanto texto picado em títulos: no primeiro o leitor',
-    '  se perde dentro do parágrafo, no segundo se perde entre eles.',
-    '- Lista com marcadores é para enumeração real (condições, propriedades, passos), não para picar explicação.',
-    '',
-    // Sem figuras aqui: quem ilustra é o revisor, que vê o texto inteiro
-    // pronto e sabe onde o desenho realmente falta. Pedir figura a quem ainda
-    // está descobrindo o assunto produz desenho do que era fácil desenhar.
-    'Não desenhe figuras: isso é trabalho da revisão.',
-    '',
-    regrasDeFormato(formato),
-  ].join('\n'),
-};
-
-const APROFUNDAMENTO: ScienceStage = {
-  role: 'aprofundamento',
-  label: 'Aprofundamento',
-  systemPrompt: (formato) => [
-    '# Papel: aprofundamento',
-    '',
-    RIGOR,
-    '',
-    'Você recebe um texto já escrito. Sua tarefa NÃO é reescrevê-lo do zero nem resumi-lo:',
-    'é aprofundar onde ele passou rápido demais.',
-    '',
-    'Procure especificamente: afirmação sem justificativa, conceito citado e não explicado,',
-    'mecanismo descrito só pelo nome, número sem contexto, e o passo que o autor pulou por achar óbvio.',
-    'Acrescente derivações, exemplos concretos, contraexemplos e as condições em que cada resultado vale.',
-    '',
-    'Devolva o texto INTEIRO, com os acréscimos integrados no lugar certo — não uma lista de sugestões.',
-    'Preserve o que já estava bom: reescrever o que não precisava é perda.',
-    '',
-    regrasDeFormato(formato),
-  ].join('\n'),
-};
-
-const SINTESE: ScienceStage = {
-  role: 'sintese',
-  label: 'Contexto e conexões',
-  systemPrompt: (formato) => [
-    '# Papel: contexto e conexões',
-    '',
-    RIGOR,
-    '',
-    'Você recebe um texto já aprofundado. Sua tarefa é dar a ele o que ainda falta para ser um material de estudo:',
-    'a moldura em volta do conteúdo.',
-    '',
-    'Acrescente: como o tema se conecta a áreas vizinhas, qual a história do problema,',
-    'que aplicações práticas existem, e o que continua em aberto na literatura.',
-    'Se houver um ponto onde o texto é vago porque a questão é genuinamente disputada, diga isso explicitamente —',
-    'esconder controvérsia atrás de uma frase neutra é pior do que não tratar do assunto.',
-    '',
-    'Devolva o texto INTEIRO, com os acréscimos no lugar certo.',
-    '',
-    regrasDeFormato(formato),
+    'Se não houver base segura para uma fonte, número ou citação, marque isso como ponto a verificar; nunca invente referências.',
+    'Entregue um roteiro detalhado, claro e útil para a autoria. A profundidade deve estar nas DIRETRIZES e nos TÓPICOS, não em prosa final pronta para publicação.',
   ].join('\n'),
 };
 
@@ -155,7 +81,7 @@ const SINTESE: ScienceStage = {
  *   figura dentro do texto. SVG cru não serve: o Markdown daqui é renderizado
  *   sem HTML, então a marcação apareceria como texto.
  */
-function mecanismoDeFigura(formato: ScienceFormat): string {
+function mecanismoDeFigura(formato: ScienceSkillFormat): string {
   if (formato === 'latex') {
     return [
       'Desenhe em **TikZ**, dentro de um ambiente figure com \\caption e \\label:',
@@ -201,7 +127,7 @@ function mecanismoDeFigura(formato: ScienceFormat): string {
  * abre na prévia de LaTeX. Errar o tipo aqui entrega o documento certo no
  * renderizador errado.
  */
-function entregaComoArtefato(formato: ScienceFormat): string {
+function entregaComoArtefato(formato: ScienceSkillFormat): string {
   const abertura = formato === 'latex'
     ? '<artifact id="documento" type="code" language="latex" title="Título do documento">'
     : '<artifact id="documento" type="markdown" title="Título do documento">';
@@ -224,35 +150,37 @@ function entregaComoArtefato(formato: ScienceFormat): string {
   ].join('\n');
 }
 
-const REVISAO: ScienceStage = {
-  role: 'revisao',
-  label: 'Revisão, coesão e ilustrações',
+const REDACAO: ScienceStage = {
+  stageId: 'redacao',
+  label: 'Redação, revisão e ilustrações',
   systemPrompt: (formato) => [
-    '# Papel: revisão final',
+    '# Papel: autoria, revisão e ilustração final',
     '',
-    'Você recebe um texto escrito por várias mãos e o entrega como um documento único.',
-    'É o seu texto que o estudante vai ler.',
+    RIGOR,
     '',
-    'Corrija, nesta ordem de prioridade:',
-    '1. **Contradição entre trechos.** Passagens escritas em momentos diferentes podem afirmar coisas incompatíveis; resolva, não some as duas.',
-    '2. **Repetição.** O mesmo conceito explicado duas vezes com palavras diferentes — mantenha a melhor explicação, no lugar mais cedo em que faça sentido.',
-    '3. **Ritmo do texto.** Nos dois sentidos: seção com um ou dois parágrafos e sub-subseções viram texto',
-    '   corrido, com a passagem resolvida por uma transição (no máximo dois níveis de título no documento);',
-    '   e parágrafo que passa de umas dez linhas é quebrado no ponto onde o segundo assunto começa.',
-    '4. **Costura.** Transições entre seções, referência para trás e para frente, termo usado antes de ser definido.',
-    '5. **Voz única.** Um texto por várias mãos oscila de registro; unifique.',
-    '6. Gramática, pontuação e concordância.',
+    'Você recebe um PLANO de desenvolvimento, não um documento pronto. Use-o como diretriz para escrever o documento final completo.',
+    'É sua responsabilidade desenvolver profundamente os tópicos propostos, ajustar o plano quando ele tiver lacunas e produzir um texto que se sustente sozinho.',
     '',
-    '**Não acrescente conteúdo escrito novo e não corte conteúdo correto.** Seu trabalho é sobre a forma;',
-    'as exceções são duas: remover repetição, que é forma disfarçada de conteúdo, e acrescentar as figuras abaixo.',
+    'Ao escrever:',
+    '1. Siga a estrutura proposta, mas reorganize quando isso melhorar a clareza e a progressão didática.',
+    '2. Desenvolva cada tópico central com explicações, mecanismos, exemplos, relações, condições de validade e, quando couber, derivações; não transforme o plano numa lista superficial.',
+    '3. Defina termos técnicos na primeira ocorrência e diferencie fatos estabelecidos de hipóteses, controvérsias ou pontos que exigem verificação.',
+    '4. Escreva com poucos níveis de título: no máximo dois. Cada seção deve ter desenvolvimento real, não uma sequência de tópicos soltos.',
+    '5. Use parágrafos de quatro a oito frases em torno de uma ideia; quebre blocos que passem de cerca de dez linhas.',
+    '',
+    'Antes de entregar, faça a revisão textual do próprio documento:',
+    '- Resolva contradições, repetição, transições fracas, termos usados antes de serem definidos e inconsistências de voz.',
+    '- Revise gramática, pontuação e concordância.',
+    '- Não preserve uma afirmação apenas porque estava no plano: corrija, qualifique ou remova o que não puder ser sustentado.',
     '',
     '## Figuras',
     '',
-    'Você também ilustra. É seu o trabalho porque você é quem lê o texto inteiro pronto:',
-    'quem ainda está descobrindo o assunto desenha o que era fácil desenhar, não o que faltava explicar.',
+    'Você também constrói as ilustrações/gravuras. Faça isso DEPOIS de escrever e revisar, pois você vê o documento inteiro e sabe onde uma figura realmente esclarece.',
     '',
-    'Inclua de duas a cinco figuras, e SOMENTE onde o desenho explica melhor que o parágrafo.',
-    'Figura que repete o texto é ruído. Mencione cada figura no ponto certo do texto.',
+    '**A entrega é inválida sem figuras. Inclua no mínimo quatro ilustrações/gravuras completas e distintas**; em documentos especialmente longos, prefira cinco ou seis.',
+    'Para temas abstratos, use diagramas conceituais, fluxos, comparações, classificações, relações de causa e efeito ou processos em vez de omitir as figuras.',
+    'Não deixe placeholders como "[inserir figura]" nem apenas descreva uma imagem: construa a figura no formato solicitado abaixo.',
+    'Cada figura deve aparecer logo após a explicação correspondente, ser citada no texto e ter legenda. Figura que apenas repete um parágrafo é ruído.',
     '',
     mecanismoDeFigura(formato),
     '',
@@ -267,52 +195,45 @@ const REVISAO: ScienceStage = {
   ].join('\n'),
 };
 
-/**
- * As três cadeias.
- *
- * O revisor é sempre o último e sempre existe: sem ele, o que sai é a soma de
- * passagens, não um documento. Os níveis diferem em quantas mãos escrevem
- * antes dele.
- */
-/**
- * A cadeia.
- *
- * Havia três níveis (2, 3 e 5 agentes). Os de 3 e 5 foram retirados depois de
- * rodarem: cada agente devolve o documento INTEIRO reescrito, então as
- * passagens extras custavam o dobro e o triplo em tempo e tokens, e o texto
- * que saía não era melhor — em parte porque cada reescrita também é uma
- * chance de o modelo perder o que já estava bom. Dois agentes com papéis
- * bem separados — quem escreve e quem revisa — é o que se sustentou.
- */
-export const SCIENCE_CHAINS: Readonly<Record<'basic', ScienceChain>> = {
-  basic: {
-    level: 'basic',
-    label: 'Ligado',
-    description: '2 agentes: um levanta e detalha o assunto, outro revisa a coesão e ilustra.',
-    stages: [PESQUISA, REVISAO],
-  },
-};
-
-/**
- * Qualquer nível ligado usa a cadeia única.
- *
- * Os valores `intermediate` e `advanced` continuam no schema porque estão
- * gravados em conversas antigas; mapeá-los para a cadeia de dois é melhor do
- * que quebrar o histórico de quem os usou.
- */
-export function scienceChain(level: ScienceLevel): ScienceChain | null {
-  return level === 'off' ? null : SCIENCE_CHAINS.basic;
-}
-
-/**
- * Mensagem que entrega o texto anterior ao próximo agente.
- *
- * Entra como `user` porque é o único papel que todo endpoint compatível aceita
- * no meio da conversa — a mesma razão documentada no laço de busca.
- */
-export function handoffMessage(role: ScienceRole, texto: string): string {
-  const cabecalho = role === 'revisao'
-    ? 'Texto a revisar (entregue apenas o documento final):'
-    : 'Texto produzido até aqui (devolva-o inteiro, com os seus acréscimos):';
+/** Mensagem que entrega o texto anterior ao próximo estágio. */
+function handoffMessage(stageId: ScienceStage['stageId'], texto: string): string {
+  const cabecalho = stageId === 'redacao'
+    ? 'Plano de desenvolvimento (use-o para escrever, revisar e entregar apenas o documento final):'
+    : 'Material produzido até aqui:';
   return `${cabecalho}\n\n<<<TEXTO>>>\n${texto}\n<<<FIM DO TEXTO>>>`;
 }
+
+const SCIENCE_STAGES: readonly ScienceStage[] = [PLANEJAMENTO, REDACAO];
+
+/**
+ * A escrita acadêmica é uma entrada do registro de skills, não um modo do
+ * chat. Outras skills podem acrescentar estágios antes ou depois dela sem
+ * alterar a lógica de streaming, custo ou persistência.
+ */
+export const scienceSkill: SkillDefinition<Extract<SkillSelection, { id: 'science' }>> = {
+  id: 'science',
+  label: 'Science',
+  description: 'Dois agentes: um estrutura o desenvolvimento; o outro escreve, revisa e ilustra o documento.',
+  resolve: (selection) => {
+    const format = selection.settings.format;
+    const stages: readonly SkillStage[] = SCIENCE_STAGES.map((stage) => ({
+      skillId: 'science',
+      stageId: stage.stageId,
+      label: stage.label,
+      systemPrompt: () => stage.systemPrompt(format),
+      handoffMessage: (text) => handoffMessage(stage.stageId, text),
+    }));
+    return {
+      id: 'science',
+      stages,
+      output: {
+        artifact: {
+          minChars: 1_200,
+          maxProseChars: 600,
+          kind: format === 'latex' ? 'code' : 'markdown',
+          language: format === 'latex' ? 'latex' : null,
+        },
+      },
+    };
+  },
+};

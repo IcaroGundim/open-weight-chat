@@ -998,7 +998,7 @@ describe('Hono API multiusuário', () => {
     return app.request('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
-      body: chatBody({ content: 'escreva sobre entropia', scienceLevel: nivel, scienceFormat: formato }),
+      body: chatBody({ content: 'escreva sobre entropia', skills: nivel === 'off' ? [] : [{ id: 'science', settings: { format: formato } }] }),
     });
   }
 
@@ -1013,18 +1013,18 @@ describe('Hono API multiusuário', () => {
     expect(resposta.status).toBe(200);
     const corpo = await resposta.text();
 
-    // Duas chamadas: levantamento e revisão.
+    // Duas chamadas: planejamento e redação final.
     expect(corpos).toHaveLength(2);
     // O usuário acompanha o progresso…
-    expect(corpo).toContain('"type":"science_stage"');
-    // …e só o texto do revisor vira a resposta.
+    expect(corpo).toContain('"type":"skill_stage"');
+    // …e só o texto do segundo agente vira a resposta.
     const conversa = database.listConversations(USER_A)[0];
     const mensagem = database.getMessages(USER_A, conversa.id).at(-1);
     expect(mensagem?.content).toContain('documento revisado');
     expect(mensagem?.content).not.toContain('rascunho do primeiro agente');
   });
 
-  it('entrega ao revisor o texto que o agente anterior escreveu', async () => {
+  it('entrega ao redator o plano que o agente anterior produziu', async () => {
     const corpos: string[] = [];
     const app = appFor(database, USER_A, async (_input, init) => {
       corpos.push(String(init?.body));
@@ -1063,7 +1063,7 @@ describe('Hono API multiusuário', () => {
     });
     const corpo = await (await chatScience(app, 'basic')).text();
 
-    expect(corpo).toContain('"type":"science_delta"');
+    expect(corpo).toContain('"type":"skill_delta"');
     expect(corpo).toContain('rascunho em andamento');
     // E o rascunho não vira a resposta guardada.
     const conversa = database.listConversations(USER_A)[0];
@@ -1202,7 +1202,7 @@ describe('Hono API multiusuário', () => {
       await (await app.request('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
-        body: chatBody({ content: 'tema', scienceLevel: 'advanced', effort: esforco }),
+        body: chatBody({ content: 'tema', skills: [{ id: 'science', settings: { format: 'markdown' } }], effort: esforco }),
       })).text();
 
       expect(corpos.length, esforco).toBe(2);
@@ -1224,7 +1224,7 @@ describe('Hono API multiusuário', () => {
     await (await app.request('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
-      body: chatBody({ content: 'tema', scienceLevel: 'intermediate', effort: 'auto' }),
+      body: chatBody({ content: 'tema', skills: [{ id: 'science', settings: { format: 'markdown' } }], effort: 'auto' }),
     })).text();
     expect(corpos).toHaveLength(2);
     for (const corpo of corpos) expect(JSON.parse(corpo).reasoning_effort).toBeUndefined();
@@ -1240,9 +1240,9 @@ describe('Hono API multiusuário', () => {
       corpos.push(corpo);
       // A falha é do ESTÁGIO, não da chamada: o llm-client repete 5xx, e
       // contar chamadas faria a segunda tentativa "consertar" o estágio.
-      // Com dois agentes o único intermediário é o redator; a falha dele não
-      // deixa texto para revisar, então o turno falha — que é o desenho.
-      if (corpo.includes('Papel: levantamento')) return new Response('falha do provedor', { status: 500 });
+      // Com dois agentes o único intermediário é o planejador; a falha dele
+      // não deixa diretrizes para desenvolver, então o turno falha.
+      if (corpo.includes('Papel: planejamento')) return new Response('falha do provedor', { status: 500 });
       return sseTexto('documento final');
     });
 
@@ -1250,7 +1250,7 @@ describe('Hono API multiusuário', () => {
     // Sem texto do redator não há o que revisar: inventar um documento a
     // partir do vazio seria pior do que dizer que não deu.
     expect(corpoSse).toContain('"type":"error"');
-    expect(corpoSse).toContain('agente 1/2 FALHOU');
+    expect(corpoSse).toContain('estágio 1/2 FALHOU');
   });
 
   it('sem nada produzido, a falha ainda é falha', async () => {
@@ -1269,8 +1269,8 @@ describe('Hono API multiusuário', () => {
 
     expect(corpo).toContain('"type":"trace"');
     expect(corpo).toContain('turno iniciado');
-    expect(corpo).toContain('agente 1/2 iniciado');
-    expect(corpo).toContain('agente 1/2 concluído');
+    expect(corpo).toContain('estágio 1/2 iniciado');
+    expect(corpo).toContain('estágio 1/2 concluído');
     expect(corpo).toContain('resposta concluída');
 
     // Nenhum evento de trace carrega o texto do modelo.
@@ -1302,8 +1302,7 @@ describe('Hono API multiusuário', () => {
     const app = appFor(database, USER_A, async () => sseTexto('texto'));
     await (await chatScience(app, 'intermediate', 'latex')).text();
     const conversa = database.listConversations(USER_A)[0];
-    expect(conversa.scienceLevel).toBe('intermediate');
-    expect(conversa.scienceFormat).toBe('latex');
+    expect(conversa.skills).toEqual([{ id: 'science', settings: { format: 'latex' } }]);
   });
 
   it('o formato escolhido chega aos agentes', async () => {
@@ -1313,8 +1312,10 @@ describe('Hono API multiusuário', () => {
       return sseTexto('texto');
     });
     await (await chatScience(app, 'basic', 'latex')).text();
-    expect(corpos[0]).toContain('LaTeX');
-    expect(corpos[0]).not.toContain('Escreva em Markdown');
+    // O planejamento é independente de formato; quem recebe a escolha e
+    // produz o documento é o segundo agente.
+    expect(corpos[1]).toContain('LaTeX');
+    expect(corpos[1]).not.toContain('Escreva em Markdown');
   });
 
   it('desligado mantém a resposta de um agente só', async () => {
@@ -1326,7 +1327,7 @@ describe('Hono API multiusuário', () => {
     await (await app.request('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeader(USER_A) },
-      body: chatBody({ scienceLevel: 'off' }),
+      body: chatBody({ skills: [] }),
     })).text();
     expect(corpos).toHaveLength(1);
   });

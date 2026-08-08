@@ -87,21 +87,29 @@ export interface Attachment {
 export const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 5;
 
-export type ScienceLevel = 'off' | 'basic' | 'intermediate' | 'advanced';
-export type ScienceFormat = 'markdown' | 'latex';
-export type ScienceRole = 'pesquisa' | 'aprofundamento' | 'sintese' | 'ilustracao' | 'revisao';
+/** Espelha as seleções de skills registradas em shared/types.ts. */
+export type SkillId = 'science';
+export type ScienceSkillFormat = 'markdown' | 'latex';
+export type SkillSelection = {
+  id: 'science';
+  settings: { format: ScienceSkillFormat };
+};
 
-/** Rótulos e contagem de agentes, num lugar só para os dois textos baterem. */
-/**
- * Um nível só.
- *
- * Havia três (2, 3 e 5 agentes). Os dois maiores foram retirados depois de
- * rodarem: cada agente reescreve o documento inteiro, então custavam o dobro e
- * o triplo sem entregar texto melhor. Os valores antigos seguem no schema por
- * causa das conversas já gravadas.
- */
-export const SCIENCE_LEVELS: Array<{ id: 'basic'; label: string; agentes: number; hint: string }> = [
-  { id: 'basic', label: 'Ligado', agentes: 2, hint: 'Um levanta e detalha o assunto; o outro revisa a coesão e ilustra.' },
+/** Metadados da interface. Novas skills entram nesta lista e no registro do servidor. */
+export const SKILLS: Array<{
+  id: SkillId;
+  label: string;
+  agentes: number;
+  hint: string;
+  formats?: ReadonlyArray<{ id: ScienceSkillFormat; label: string }>;
+}> = [
+  {
+    id: 'science',
+    label: 'Science',
+    agentes: 2,
+    hint: 'Um agente estrutura o desenvolvimento; o outro escreve, revisa e cria as ilustrações.',
+    formats: [{ id: 'markdown', label: 'Markdown' }, { id: 'latex', label: 'LaTeX' }],
+  },
 ];
 
 /** Uma linha do log de diagnóstico. Eventos, nunca conteúdo. */
@@ -114,8 +122,9 @@ export interface TraceEvent {
 }
 
 /** Rascunho do agente em curso. Some quando a resposta final começa. */
-export interface ScienceDraft {
-  role: ScienceRole;
+export interface SkillDraft {
+  skillId: SkillId;
+  stageId: string;
   index: number;
   /** O documento sendo escrito. */
   text: string;
@@ -123,8 +132,9 @@ export interface ScienceDraft {
   reasoning: string;
 }
 
-export interface ScienceStageEvent {
-  role: ScienceRole;
+export interface SkillStageEvent {
+  skillId: SkillId;
+  stageId: string;
   label: string;
   index: number;
   total: number;
@@ -264,16 +274,15 @@ export interface Usage {
 
 export interface ChatMessage {
   id: string;
-  /** Estágios da cadeia Science, guardados NA mensagem: quem reabre a conversa
-   *  precisa saber por quantas mãos aquele texto passou. */
-  scienceStages?: ScienceStageEvent[];
+  /** Estágios das skills, guardados para preservar o histórico do turno. */
+  skillStages?: SkillStageEvent[];
   /** Início e fim do turno, para o velocímetro medir a velocidade exata. */
   startedAt?: number;
   finishedAt?: number;
   /** Log do turno. Só do cliente: é diagnóstico da sessão, não histórico. */
   trace?: TraceEvent[];
   /** Só durante a geração: não é persistido, é processo e não produto. */
-  scienceDraft?: ScienceDraft;
+  skillDraft?: SkillDraft;
   attachments?: Attachment[];
   conversationId?: string;
   role: MessageRole;
@@ -303,8 +312,7 @@ export interface Conversation {
   messageCount?: number;
   archived?: boolean;
   effort?: EffortLevel;
-  scienceLevel?: ScienceLevel;
-  scienceFormat?: ScienceFormat;
+  skills?: SkillSelection[];
 }
 
 export interface ModelOption {
@@ -395,8 +403,7 @@ export interface ChatRequest {
   webSearch?: boolean;
   attachmentIds?: string[];
   spreadsheetSelection?: Omit<SpreadsheetSelection, 'filename'>;
-  scienceLevel?: ScienceLevel;
-  scienceFormat?: ScienceFormat;
+  skills?: SkillSelection[];
 }
 
 export const EMPTY_MESSAGES: ChatMessage[] = [];

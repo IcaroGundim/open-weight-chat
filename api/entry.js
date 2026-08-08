@@ -195,20 +195,38 @@ var SseSearchEndSchema = SseBaseSchema.extend({
   /** Preenchido quando a busca falhou: o modelo segue, o usuário fica sabendo. */
   failure: z.string().max(300).nullable().optional()
 });
-var ScienceLevelSchema = z.enum(["off", "basic", "intermediate", "advanced"]);
-var ScienceFormatSchema = z.enum(["markdown", "latex"]);
-var ScienceRoleSchema = z.enum(["pesquisa", "aprofundamento", "sintese", "ilustracao", "revisao"]);
-var SseScienceStageSchema = SseBaseSchema.extend({
-  type: z.literal("science_stage"),
-  role: ScienceRoleSchema,
+var SkillIdSchema = z.enum(["science"]);
+var ScienceSkillFormatSchema = z.enum(["markdown", "latex"]);
+var ScienceSkillSelectionSchema = z.object({
+  id: z.literal("science"),
+  settings: z.object({
+    format: ScienceSkillFormatSchema.default("markdown")
+  }).default({ format: "markdown" })
+});
+var SkillSelectionSchema = z.discriminatedUnion("id", [ScienceSkillSelectionSchema]);
+var SkillSelectionsSchema = z.array(SkillSelectionSchema).max(8).superRefine((skills, context) => {
+  const seen = /* @__PURE__ */ new Set();
+  for (const [index, skill] of skills.entries()) {
+    if (seen.has(skill.id)) {
+      context.addIssue({ code: "custom", message: `A skill "${skill.id}" foi selecionada mais de uma vez.`, path: [index, "id"] });
+      return;
+    }
+    seen.add(skill.id);
+  }
+});
+var SseSkillStageSchema = SseBaseSchema.extend({
+  type: z.literal("skill_stage"),
+  skillId: SkillIdSchema,
+  stageId: z.string().min(1).max(80),
   label: z.string().min(1).max(120),
   index: z.number().int().positive(),
   total: z.number().int().positive(),
   status: z.enum(["start", "done"])
 });
-var SseScienceDeltaSchema = SseBaseSchema.extend({
-  type: z.literal("science_delta"),
-  role: ScienceRoleSchema,
+var SseSkillDeltaSchema = SseBaseSchema.extend({
+  type: z.literal("skill_delta"),
+  skillId: SkillIdSchema,
+  stageId: z.string().min(1).max(80),
   index: z.number().int().positive(),
   text: z.string(),
   /**
@@ -225,7 +243,7 @@ var SseScienceDeltaSchema = SseBaseSchema.extend({
 });
 var SseTraceSchema = SseBaseSchema.extend({
   type: z.literal("trace"),
-  /** De onde veio: `chat`, `science`, `busca`, `provedor`, `artefato`. */
+  /** De onde veio: `chat`, `skill`, `busca`, `provedor`, `artefato`. */
   scope: z.string().min(1).max(24),
   event: z.string().min(1).max(80),
   /** Números e rótulos curtos. Sem texto do modelo. */
@@ -239,8 +257,8 @@ var SseEnvelopeSchema = z.discriminatedUnion("type", [
   SseUsageSchema,
   SseErrorSchema,
   SseDoneSchema,
-  SseScienceStageSchema,
-  SseScienceDeltaSchema,
+  SseSkillStageSchema,
+  SseSkillDeltaSchema,
   SseTraceSchema,
   SseSearchStartSchema,
   SseSearchEndSchema,
@@ -435,16 +453,16 @@ var ChatRequestSchema = z.object({
   attachmentIds: z.array(z.string().min(1)).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
   /** Intervalo escolhido na grade para esta pergunta; o servidor lê os dados. */
   spreadsheetSelection: SpreadsheetSelectionSchema.optional(),
-  /** Ausente ou `off` mantém a resposta normal, de um agente só. */
-  scienceLevel: ScienceLevelSchema.optional(),
-  scienceFormat: ScienceFormatSchema.optional()
+  /** Ausente preserva a seleção salva na conversa; [] responde normalmente. */
+  skills: SkillSelectionsSchema.optional()
 });
 var CreateConversationSchema = z.object({
   title: z.string().trim().min(1).max(200).nullable().optional(),
   providerId: ProviderIdSchema.optional(),
   modelId: z.string().trim().min(1).max(200).optional(),
   systemPrompt: z.string().max(1e5).nullable().optional(),
-  effort: EffortLevelSchema.optional()
+  effort: EffortLevelSchema.optional(),
+  skills: SkillSelectionsSchema.optional()
 });
 var UpdateConversationSchema = z.object({
   title: z.string().trim().min(1).max(200).nullable().optional(),
@@ -452,6 +470,7 @@ var UpdateConversationSchema = z.object({
   modelId: z.string().trim().min(1).max(200).optional(),
   systemPrompt: z.string().max(1e5).nullable().optional(),
   effort: EffortLevelSchema.optional(),
+  skills: SkillSelectionsSchema.optional(),
   archived: z.boolean().optional()
 });
 var MessageSchema = z.object({
@@ -471,10 +490,8 @@ var MessageSchema = z.object({
   latencyMs: z.number().int().nonnegative().nullable()
 });
 var ConversationSummarySchema = z.object({
-  /** Cadeia de agentes desta conversa. `off` é o estado de quem não usa. */
-  scienceLevel: ScienceLevelSchema.optional(),
-  /** Formato escolhido uma vez, na primeira mensagem em modo Science. */
-  scienceFormat: ScienceFormatSchema.optional(),
+  /** Skills ativas nesta conversa, na ordem de execução. */
+  skills: SkillSelectionsSchema.default([]),
   id: z.string().min(1),
   title: z.string().nullable(),
   providerId: ProviderIdSchema,
@@ -2175,6 +2192,19 @@ function providerId(value) {
   const parsed = ProviderIdSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
+function parseSkills(value, legacyLevel, legacyFormat) {
+  if (typeof value === "string") {
+    try {
+      const parsed = SkillSelectionsSchema.safeParse(JSON.parse(value));
+      if (parsed.success) return parsed.data;
+    } catch {
+    }
+  }
+  if (legacyLevel != null && legacyLevel !== "off") {
+    return [{ id: "science", settings: { format: legacyFormat === "latex" ? "latex" : "markdown" } }];
+  }
+  return [];
+}
 function usage(row) {
   if ([row.prompt_tokens, row.cached_tokens, row.completion_tokens, row.reasoning_tokens, row.total_tokens].every((value) => value == null)) return null;
   const promptTokens = number2(row.prompt_tokens);
@@ -2233,8 +2263,7 @@ function conversationBase(row) {
     modelId: text2(row.model_id),
     systemPrompt: nullableText(row.system_prompt),
     effort: parseEffortColumn(row.effort),
-    scienceLevel: row.science_level ?? "off",
-    scienceFormat: row.science_format ?? void 0,
+    skills: parseSkills(row.skills_json, row.science_level, row.science_format),
     createdAt: number2(row.created_at),
     updatedAt: number2(row.updated_at),
     archived: bool(row.archived)
@@ -2282,8 +2311,8 @@ var NeonChatDatabase = class {
     const id = data.id ?? randomUUID();
     const now = data.createdAt ?? Date.now();
     await this.rows(
-      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,science_level,science_format,created_at,updated_at,archived)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,false) RETURNING *`,
+      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,skills_json,created_at,updated_at,archived)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,false) RETURNING *`,
       [
         id,
         userId,
@@ -2292,8 +2321,7 @@ var NeonChatDatabase = class {
         data.modelId,
         data.systemPrompt ?? null,
         data.effort ?? "auto",
-        data.scienceLevel ?? "off",
-        data.scienceFormat ?? null,
+        JSON.stringify(data.skills ?? []),
         now
       ]
     );
@@ -2317,7 +2345,7 @@ var NeonChatDatabase = class {
     const current = await this.getConversation(userId, id);
     if (!current) return null;
     await this.rows(
-      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,science_level=$8,science_format=$9,archived=$10,updated_at=$11
+      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,skills_json=$8,archived=$9,updated_at=$10
         WHERE id=$1 AND user_id=$2 RETURNING *`,
       [
         id,
@@ -2327,8 +2355,7 @@ var NeonChatDatabase = class {
         data.modelId ?? current.modelId,
         data.systemPrompt === void 0 ? current.systemPrompt : data.systemPrompt,
         data.effort ?? current.effort,
-        data.scienceLevel ?? current.scienceLevel ?? "off",
-        data.scienceFormat ?? current.scienceFormat ?? null,
+        JSON.stringify(data.skills ?? current.skills),
         data.archived ?? current.archived,
         Date.now()
       ]
@@ -4362,14 +4389,18 @@ function regrasDeFormato(formato) {
       "Escreva em LaTeX, num documento `article` completo: pre\xE2mbulo, \\begin{document} e \\end{document}.",
       "Use \\section e \\subsection para a estrutura, o ambiente equation para f\xF3rmulas de bloco e $...$ para as de linha.",
       "Cita\xE7\xF5es com \\cite e as refer\xEAncias num thebibliography no fim.",
+      "No pre\xE2mbulo, use os pacotes usuais geometry (margens equilibradas), microtype, amsmath, hyperref, booktabs e tikz.",
+      "Abra o documento com t\xEDtulo, autoria, data e maketitle; mantenha tipografia, margens, espa\xE7amento e legendas consistentes.",
       "N\xE3o use pacotes ex\xF3ticos: o documento precisa compilar com article, amsmath e hyperref.",
       'Inclua \\usepackage[utf8]{inputenc} e escreva os acentos DIRETO em UTF-8 \u2014 "m\xE9todo", "identifica\xE7\xE3o".',
       "Nunca use as formas antigas \\'e, \\c{c} ou \\~ao: s\xE3o legado de fonte n\xE3o-UTF-8 e deixam o texto ileg\xEDvel fora de um compilador."
     ].join(" ");
   }
   return [
-    "Escreva em Markdown.",
+    "Escreva em Markdown com apresenta\xE7\xE3o visual clara e profissional: abra com um t\xEDtulo de n\xEDvel 1 e uma introdu\xE7\xE3o curta que situe o leitor.",
     "Use ## e ### para a estrutura, $...$ e $$...$$ para matem\xE1tica (nunca crase para f\xF3rmula) e tabelas do GitHub quando couber.",
+    "Use espa\xE7amento entre se\xE7\xF5es, tabelas leg\xEDveis e destaque moderado para conceitos-chave; n\xE3o transforme cada frase em uma lista.",
+    "Cada figura precisa de legenda, ser mencionada no corpo do texto e ficar pr\xF3xima da explica\xE7\xE3o que ela apoia.",
     "As refer\xEAncias v\xE3o numa se\xE7\xE3o final, com link quando existir."
   ].join(" ");
 }
@@ -4379,46 +4410,25 @@ var RIGOR = [
   "**N\xE3o invente fonte, n\xFAmero, data ou cita\xE7\xE3o.** Quando n\xE3o souber, escreva o que se sabe e diga explicitamente o que est\xE1 em aberto \u2014 uma refer\xEAncia inventada destr\xF3i a utilidade do texto inteiro e \xE9 o pior erro poss\xEDvel aqui.",
   "Defina cada termo t\xE9cnico na primeira vez que aparecer."
 ].join(" ");
-var PESQUISA = {
-  role: "pesquisa",
-  label: "Levantamento e contexto detalhado",
-  systemPrompt: (formato) => [
-    "# Papel: levantamento e reda\xE7\xE3o",
+var PLANEJAMENTO = {
+  stageId: "planejamento",
+  label: "Estrutura e diretrizes",
+  systemPrompt: () => [
+    "# Papel: planejamento do desenvolvimento",
     "",
-    RIGOR,
+    "Voc\xEA \xE9 o primeiro agente da skill Science. Sua sa\xEDda ser\xE1 usada por outro agente para escrever o documento final.",
+    "**N\xE3o escreva o documento final, n\xE3o redija par\xE1grafos de entrega e n\xE3o desenhe ilustra\xE7\xF5es.** Produza um plano de desenvolvimento profundo e acion\xE1vel.",
     "",
-    "Sua tarefa \xE9 levantar o que se sabe sobre o tema e escrever um contexto DETALHADO sobre ele.",
-    "Comece pelo mapa do assunto \u2014 defini\xE7\xF5es, correntes, resultados centrais, controv\xE9rsias \u2014 e s\xF3 ent\xE3o escreva.",
-    "Detalhe: derive o que pode ser derivado, d\xEA exemplos concretos, diga as condi\xE7\xF5es em que cada resultado vale",
-    "e explique o passo que um autor apressado pularia por achar \xF3bvio.",
-    "Cubra o tema inteiro, mesmo que de forma ainda desigual: quem vem depois aprofunda e revisa, mas n\xE3o adivinha o que voc\xEA deixou de fora.",
-    'Estruture com se\xE7\xF5es nomeadas pelo conte\xFAdo, nunca por fun\xE7\xE3o ("Se\xE7\xE3o 2", "Desenvolvimento").',
+    "Monte o plano com estas partes:",
+    "1. **Recorte e objetivo.** Delimite o que a resposta deve explicar, o n\xEDvel de profundidade adequado e as quest\xF5es centrais.",
+    '2. **Estrutura proposta.** Liste se\xE7\xF5es e subse\xE7\xF5es com t\xEDtulos espec\xEDficos, em uma ordem did\xE1tica. Evite t\xEDtulos gen\xE9ricos como "Desenvolvimento".',
+    "3. **T\xF3picos a aprofundar.** Para cada se\xE7\xE3o, descreva conceitos, mecanismos, argumentos, rela\xE7\xF5es, exemplos, deriva\xE7\xF5es, condi\xE7\xF5es de validade, controv\xE9rsias e conex\xF5es que o texto final precisa desenvolver profundamente.",
+    "4. **Diretrizes de escrita.** Indique a progress\xE3o entre se\xE7\xF5es, termos que exigem defini\xE7\xE3o, perguntas que o texto precisa responder, evid\xEAncias a qualificar e armadilhas conceituais a evitar.",
+    "5. **Oportunidades de ilustra\xE7\xE3o.** Sugira pelo menos quatro rela\xE7\xF5es, processos ou compara\xE7\xF5es que merecem figuras e o que cada figura deve esclarecer \u2014 apenas a inten\xE7\xE3o, sem criar a gravura.",
+    "6. **Apresenta\xE7\xE3o visual.** Indique como t\xEDtulo, se\xE7\xF5es, tabelas, f\xF3rmulas, destaques e figuras devem organizar o documento para que ele seja agrad\xE1vel e f\xE1cil de consultar.",
     "",
-    "## Estrutura: poucos t\xEDtulos, par\xE1grafos de tamanho normal",
-    "",
-    "Duas coisas diferentes, e \xE9 f\xE1cil confundi-las: **menos T\xCDTULOS n\xE3o \xE9 menos QUEBRAS DE PAR\xC1GRAFO.**",
-    "O texto tem poucas se\xE7\xF5es e, dentro de cada uma, v\xE1rios par\xE1grafos de tamanho comum.",
-    "",
-    "Sobre os t\xEDtulos:",
-    "- No m\xE1ximo **dois n\xEDveis**. Nada de sub-subse\xE7\xE3o.",
-    "- Cada se\xE7\xE3o tem **tr\xEAs par\xE1grafos ou mais**. Se tem um s\xF3, ela n\xE3o era uma se\xE7\xE3o: junte ao texto vizinho.",
-    "- S\xF3 abra uma subse\xE7\xE3o quando o assunto realmente mudar; mudan\xE7a de aspecto do MESMO assunto \xE9 par\xE1grafo novo.",
-    "- Um t\xEDtulo a cada dois par\xE1grafos transforma o documento numa lista de t\xF3picos, e a conex\xE3o entre as ideias",
-    "  \u2014 que \xE9 o que se estuda \u2014 desaparece nos espa\xE7os em branco entre os t\xEDtulos.",
-    "",
-    "Sobre os par\xE1grafos:",
-    "- Cada par\xE1grafo trata de **uma ideia**, em geral de quatro a oito frases.",
-    "- Passou de umas dez linhas, quase certamente virou dois assuntos: quebre no ponto em que o segundo come\xE7a.",
-    "- Bloco enorme e sem respiro \xE9 t\xE3o ruim de estudar quanto texto picado em t\xEDtulos: no primeiro o leitor",
-    "  se perde dentro do par\xE1grafo, no segundo se perde entre eles.",
-    "- Lista com marcadores \xE9 para enumera\xE7\xE3o real (condi\xE7\xF5es, propriedades, passos), n\xE3o para picar explica\xE7\xE3o.",
-    "",
-    // Sem figuras aqui: quem ilustra é o revisor, que vê o texto inteiro
-    // pronto e sabe onde o desenho realmente falta. Pedir figura a quem ainda
-    // está descobrindo o assunto produz desenho do que era fácil desenhar.
-    "N\xE3o desenhe figuras: isso \xE9 trabalho da revis\xE3o.",
-    "",
-    regrasDeFormato(formato)
+    "Se n\xE3o houver base segura para uma fonte, n\xFAmero ou cita\xE7\xE3o, marque isso como ponto a verificar; nunca invente refer\xEAncias.",
+    "Entregue um roteiro detalhado, claro e \xFAtil para a autoria. A profundidade deve estar nas DIRETRIZES e nos T\xD3PICOS, n\xE3o em prosa final pronta para publica\xE7\xE3o."
   ].join("\n")
 };
 function mecanismoDeFigura(formato) {
@@ -4474,35 +4484,37 @@ function entregaComoArtefato(formato) {
     "N\xE3o parta o documento em v\xE1rios artefatos: \xE9 um s\xF3."
   ].join("\n");
 }
-var REVISAO = {
-  role: "revisao",
-  label: "Revis\xE3o, coes\xE3o e ilustra\xE7\xF5es",
+var REDACAO = {
+  stageId: "redacao",
+  label: "Reda\xE7\xE3o, revis\xE3o e ilustra\xE7\xF5es",
   systemPrompt: (formato) => [
-    "# Papel: revis\xE3o final",
+    "# Papel: autoria, revis\xE3o e ilustra\xE7\xE3o final",
     "",
-    "Voc\xEA recebe um texto escrito por v\xE1rias m\xE3os e o entrega como um documento \xFAnico.",
-    "\xC9 o seu texto que o estudante vai ler.",
+    RIGOR,
     "",
-    "Corrija, nesta ordem de prioridade:",
-    "1. **Contradi\xE7\xE3o entre trechos.** Passagens escritas em momentos diferentes podem afirmar coisas incompat\xEDveis; resolva, n\xE3o some as duas.",
-    "2. **Repeti\xE7\xE3o.** O mesmo conceito explicado duas vezes com palavras diferentes \u2014 mantenha a melhor explica\xE7\xE3o, no lugar mais cedo em que fa\xE7a sentido.",
-    "3. **Ritmo do texto.** Nos dois sentidos: se\xE7\xE3o com um ou dois par\xE1grafos e sub-subse\xE7\xF5es viram texto",
-    "   corrido, com a passagem resolvida por uma transi\xE7\xE3o (no m\xE1ximo dois n\xEDveis de t\xEDtulo no documento);",
-    "   e par\xE1grafo que passa de umas dez linhas \xE9 quebrado no ponto onde o segundo assunto come\xE7a.",
-    "4. **Costura.** Transi\xE7\xF5es entre se\xE7\xF5es, refer\xEAncia para tr\xE1s e para frente, termo usado antes de ser definido.",
-    "5. **Voz \xFAnica.** Um texto por v\xE1rias m\xE3os oscila de registro; unifique.",
-    "6. Gram\xE1tica, pontua\xE7\xE3o e concord\xE2ncia.",
+    "Voc\xEA recebe um PLANO de desenvolvimento, n\xE3o um documento pronto. Use-o como diretriz para escrever o documento final completo.",
+    "\xC9 sua responsabilidade desenvolver profundamente os t\xF3picos propostos, ajustar o plano quando ele tiver lacunas e produzir um texto que se sustente sozinho.",
     "",
-    "**N\xE3o acrescente conte\xFAdo escrito novo e n\xE3o corte conte\xFAdo correto.** Seu trabalho \xE9 sobre a forma;",
-    "as exce\xE7\xF5es s\xE3o duas: remover repeti\xE7\xE3o, que \xE9 forma disfar\xE7ada de conte\xFAdo, e acrescentar as figuras abaixo.",
+    "Ao escrever:",
+    "1. Siga a estrutura proposta, mas reorganize quando isso melhorar a clareza e a progress\xE3o did\xE1tica.",
+    "2. Desenvolva cada t\xF3pico central com explica\xE7\xF5es, mecanismos, exemplos, rela\xE7\xF5es, condi\xE7\xF5es de validade e, quando couber, deriva\xE7\xF5es; n\xE3o transforme o plano numa lista superficial.",
+    "3. Defina termos t\xE9cnicos na primeira ocorr\xEAncia e diferencie fatos estabelecidos de hip\xF3teses, controv\xE9rsias ou pontos que exigem verifica\xE7\xE3o.",
+    "4. Escreva com poucos n\xEDveis de t\xEDtulo: no m\xE1ximo dois. Cada se\xE7\xE3o deve ter desenvolvimento real, n\xE3o uma sequ\xEAncia de t\xF3picos soltos.",
+    "5. Use par\xE1grafos de quatro a oito frases em torno de uma ideia; quebre blocos que passem de cerca de dez linhas.",
+    "",
+    "Antes de entregar, fa\xE7a a revis\xE3o textual do pr\xF3prio documento:",
+    "- Resolva contradi\xE7\xF5es, repeti\xE7\xE3o, transi\xE7\xF5es fracas, termos usados antes de serem definidos e inconsist\xEAncias de voz.",
+    "- Revise gram\xE1tica, pontua\xE7\xE3o e concord\xE2ncia.",
+    "- N\xE3o preserve uma afirma\xE7\xE3o apenas porque estava no plano: corrija, qualifique ou remova o que n\xE3o puder ser sustentado.",
     "",
     "## Figuras",
     "",
-    "Voc\xEA tamb\xE9m ilustra. \xC9 seu o trabalho porque voc\xEA \xE9 quem l\xEA o texto inteiro pronto:",
-    "quem ainda est\xE1 descobrindo o assunto desenha o que era f\xE1cil desenhar, n\xE3o o que faltava explicar.",
+    "Voc\xEA tamb\xE9m constr\xF3i as ilustra\xE7\xF5es/gravuras. Fa\xE7a isso DEPOIS de escrever e revisar, pois voc\xEA v\xEA o documento inteiro e sabe onde uma figura realmente esclarece.",
     "",
-    "Inclua de duas a cinco figuras, e SOMENTE onde o desenho explica melhor que o par\xE1grafo.",
-    "Figura que repete o texto \xE9 ru\xEDdo. Mencione cada figura no ponto certo do texto.",
+    "**A entrega \xE9 inv\xE1lida sem figuras. Inclua no m\xEDnimo quatro ilustra\xE7\xF5es/gravuras completas e distintas**; em documentos especialmente longos, prefira cinco ou seis.",
+    "Para temas abstratos, use diagramas conceituais, fluxos, compara\xE7\xF5es, classifica\xE7\xF5es, rela\xE7\xF5es de causa e efeito ou processos em vez de omitir as figuras.",
+    'N\xE3o deixe placeholders como "[inserir figura]" nem apenas descreva uma imagem: construa a figura no formato solicitado abaixo.',
+    "Cada figura deve aparecer logo ap\xF3s a explica\xE7\xE3o correspondente, ser citada no texto e ter legenda. Figura que apenas repete um par\xE1grafo \xE9 ru\xEDdo.",
     "",
     mecanismoDeFigura(formato),
     "",
@@ -4516,24 +4528,61 @@ var REVISAO = {
     regrasDeFormato(formato)
   ].join("\n")
 };
-var SCIENCE_CHAINS = {
-  basic: {
-    level: "basic",
-    label: "Ligado",
-    description: "2 agentes: um levanta e detalha o assunto, outro revisa a coes\xE3o e ilustra.",
-    stages: [PESQUISA, REVISAO]
-  }
-};
-function scienceChain(level) {
-  return level === "off" ? null : SCIENCE_CHAINS.basic;
-}
-function handoffMessage(role, texto2) {
-  const cabecalho = role === "revisao" ? "Texto a revisar (entregue apenas o documento final):" : "Texto produzido at\xE9 aqui (devolva-o inteiro, com os seus acr\xE9scimos):";
+function handoffMessage(stageId, texto2) {
+  const cabecalho = stageId === "redacao" ? "Plano de desenvolvimento (use-o para escrever, revisar e entregar apenas o documento final):" : "Material produzido at\xE9 aqui:";
   return `${cabecalho}
 
 <<<TEXTO>>>
 ${texto2}
 <<<FIM DO TEXTO>>>`;
+}
+var SCIENCE_STAGES = [PLANEJAMENTO, REDACAO];
+var scienceSkill = {
+  id: "science",
+  label: "Science",
+  description: "Dois agentes: um estrutura o desenvolvimento; o outro escreve, revisa e ilustra o documento.",
+  resolve: (selection) => {
+    const format = selection.settings.format;
+    const stages = SCIENCE_STAGES.map((stage) => ({
+      skillId: "science",
+      stageId: stage.stageId,
+      label: stage.label,
+      systemPrompt: () => stage.systemPrompt(format),
+      handoffMessage: (text3) => handoffMessage(stage.stageId, text3)
+    }));
+    return {
+      id: "science",
+      stages,
+      output: {
+        artifact: {
+          minChars: 1200,
+          maxProseChars: 600,
+          kind: format === "latex" ? "code" : "markdown",
+          language: format === "latex" ? "latex" : null
+        }
+      }
+    };
+  }
+};
+
+// src/server/skills/index.ts
+var SKILL_REGISTRY = {
+  science: scienceSkill
+};
+function resolveSkillChain(selections) {
+  if (selections.length === 0) return null;
+  const resolved = selections.map((selection) => SKILL_REGISTRY[selection.id].resolve(selection));
+  const stages = resolved.flatMap((skill) => skill.stages);
+  if (stages.length === 0) {
+    throw new Error(`As skills selecionadas (${selections.map((skill) => skill.id).join(", ")}) n\xE3o registraram nenhum est\xE1gio.`);
+  }
+  return {
+    selections,
+    stages,
+    // A última skill é dona da forma da resposta final. Isso permite, por
+    // exemplo, uma skill futura de revisão depois da escrita acadêmica.
+    output: resolved.at(-1)?.output ?? {}
+  };
 }
 
 // src/server/spreadsheets.ts
@@ -5168,8 +5217,6 @@ function pickDefaultRateLimitStore(db) {
 var ORPHAN_ATTACHMENT_MS = 24 * 60 * 60 * 1e3;
 var MAX_SEARCH_ROUNDS = 3;
 var MAX_DESCARTE_APOS_MARCADOR = 4e3;
-var MIN_SCIENCE_ARTIFACT_CHARS = 1200;
-var MAX_SCIENCE_PROSE_CHARS = 600;
 try {
   process.loadEnvFile(process.env.ENV_FILE ?? ".env");
 } catch {
@@ -5746,7 +5793,8 @@ function createApp(options = {}) {
         providerId: providerId2,
         modelId,
         systemPrompt: body.systemPrompt,
-        effort: body.effort
+        effort: body.effort,
+        skills: body.skills
       });
       return c.json({ conversation }, 201);
     } catch (error) {
@@ -5875,7 +5923,8 @@ function createApp(options = {}) {
         conversation = await db.createConversation(userId, {
           providerId: selection.provider.id,
           modelId: selection.model.id,
-          effort: request.effort
+          effort: request.effort,
+          skills: request.skills
         });
       } else if (conversation.providerId !== selection.provider.id || conversation.modelId !== selection.model.id || request.effort !== void 0 && request.effort !== conversation.effort) {
         conversation = await db.updateConversation(userId, conversation.id, {
@@ -5923,13 +5972,11 @@ function createApp(options = {}) {
         lista.push(anexo);
         anexosPorMensagem.set(anexo.messageId, lista);
       }
-      const nivelScience = request.scienceLevel ?? conversation.scienceLevel ?? "off";
-      const formatoScience = request.scienceFormat ?? conversation.scienceFormat ?? "markdown";
-      const cadeia = scienceChain(nivelScience);
-      if (request.scienceLevel !== void 0 || request.scienceFormat !== void 0) {
+      const skills = request.skills ?? conversation.skills;
+      const cadeiaDeSkills = resolveSkillChain(skills);
+      if (request.skills !== void 0 && JSON.stringify(request.skills) !== JSON.stringify(conversation.skills)) {
         const atualizada = await db.updateConversation(userId, conversation.id, {
-          scienceLevel: nivelScience,
-          scienceFormat: formatoScience
+          skills
         });
         if (atualizada) conversation = atualizada;
       }
@@ -6290,20 +6337,21 @@ ${artifactMarker(parserEvent.slug, version2)}
                 stream,
                 "chat",
                 "turno iniciado",
-                `${selection.provider.id}/${selection.model.id} \xB7 esfor\xE7o ${conversation.effort} \xB7 science ${nivelScience}${cadeia ? ` (${cadeia.stages.length} agentes, ${formatoScience})` : ""} \xB7 busca ${busca ? "ligada" : "desligada"} \xB7 contexto ${context.messages.length} mensagens${context.truncated ? " (aparado)" : ""}`
+                `${selection.provider.id}/${selection.model.id} \xB7 esfor\xE7o ${conversation.effort} \xB7 skills ${skills.length > 0 ? skills.map((skill) => skill.id).join(", ") : "nenhuma"}${cadeiaDeSkills ? ` (${cadeiaDeSkills.stages.length} est\xE1gios)` : ""} \xB7 busca ${busca ? "ligada" : "desligada"} \xB7 contexto ${context.messages.length} mensagens${context.truncated ? " (aparado)" : ""}`
               );
-              let materialScience = null;
+              let materialDasSkills = null;
               const falhasDeEstagio = [];
-              if (cadeia) {
-                const intermediarios = cadeia.stages.slice(0, -1);
+              if (cadeiaDeSkills) {
+                const intermediarios = cadeiaDeSkills.stages.slice(0, -1);
                 let texto2 = "";
                 for (const [posicao, estagio] of intermediarios.entries()) {
                   await emit(stream, {
-                    type: "science_stage",
-                    role: estagio.role,
+                    type: "skill_stage",
+                    skillId: estagio.skillId,
+                    stageId: estagio.stageId,
                     label: estagio.label,
                     index: posicao + 1,
-                    total: cadeia.stages.length,
+                    total: cadeiaDeSkills.stages.length,
                     status: "start",
                     conversationId: conversation.id,
                     messageId: assistant.id
@@ -6313,9 +6361,9 @@ ${artifactMarker(parserEvent.slug, version2)}
 
 [\u2026texto cortado por tamanho; continue a partir daqui\u2026]` : texto2;
                   const entrada = [
-                    { role: "system", content: estagio.systemPrompt(formatoScience) },
+                    { role: "system", content: estagio.systemPrompt() },
                     ...context.messages.filter((m) => m.role !== "system"),
-                    ...textoOrcado ? [{ role: "user", content: handoffMessage(estagio.role, textoOrcado) }] : []
+                    ...textoOrcado ? [{ role: "user", content: estagio.handoffMessage(textoOrcado) }] : []
                   ];
                   let produzido = "";
                   let usoDoEstagio = null;
@@ -6324,9 +6372,9 @@ ${artifactMarker(parserEvent.slug, version2)}
                   const comecouEm = Date.now();
                   await trace(
                     stream,
-                    "science",
-                    `agente ${posicao + 1}/${cadeia.stages.length} iniciado`,
-                    `${estagio.role} \xB7 entrada ${estimateTokens(entrada.map((m) => m.content).join("\n"))} tokens estimados`
+                    "skill",
+                    `est\xE1gio ${posicao + 1}/${cadeiaDeSkills.stages.length} iniciado`,
+                    `${estagio.skillId}/${estagio.stageId} \xB7 entrada ${estimateTokens(entrada.map((m) => m.content).join("\n"))} tokens estimados`
                   );
                   try {
                     for await (const evento of streamOpenAICompatible({
@@ -6347,8 +6395,9 @@ ${artifactMarker(parserEvent.slug, version2)}
                       if (evento.kind === "text") {
                         produzido += evento.text;
                         await emit(stream, {
-                          type: "science_delta",
-                          role: estagio.role,
+                          type: "skill_delta",
+                          skillId: estagio.skillId,
+                          stageId: estagio.stageId,
                           index: posicao + 1,
                           text: evento.text,
                           conversationId: conversation.id,
@@ -6361,8 +6410,9 @@ ${artifactMarker(parserEvent.slug, version2)}
                       } else if (evento.kind === "reasoning") {
                         caracteresDeRaciocinio += evento.reasoning.length;
                         await emit(stream, {
-                          type: "science_delta",
-                          role: estagio.role,
+                          type: "skill_delta",
+                          skillId: estagio.skillId,
+                          stageId: estagio.stageId,
                           index: posicao + 1,
                           text: evento.reasoning,
                           reasoning: true,
@@ -6377,56 +6427,55 @@ ${artifactMarker(parserEvent.slug, version2)}
                     falhasDeEstagio.push(`${estagio.label}: ${motivo.message}`);
                     await trace(
                       stream,
-                      "science",
-                      `agente ${posicao + 1}/${cadeia.stages.length} FALHOU`,
+                      "skill",
+                      `est\xE1gio ${posicao + 1}/${cadeiaDeSkills.stages.length} FALHOU`,
                       `${motivo.code} \xB7 ${motivo.message}`
                     );
                     if (!texto2.trim() && !produzido.trim()) throw falha;
                   }
                   usoPorRound.push(usoDoEstagio);
                   promptText += `
-${estagio.role}: ${entrada.map((m) => m.content).join("\n")}`;
+${estagio.skillId}/${estagio.stageId}: ${entrada.map((m) => m.content).join("\n")}`;
                   const aproveitou = produzido.trim().length > 0;
                   texto2 = produzido.trim() || texto2;
                   await trace(
                     stream,
-                    "science",
-                    `agente ${posicao + 1}/${cadeia.stages.length} conclu\xEDdo`,
+                    "skill",
+                    `est\xE1gio ${posicao + 1}/${cadeiaDeSkills.stages.length} conclu\xEDdo`,
                     `${((Date.now() - comecouEm) / 1e3).toFixed(1)}s \xB7 ${produzido.length} caracteres${caracteresDeRaciocinio > 0 ? ` \xB7 ${caracteresDeRaciocinio} de racioc\xEDnio` : ""}${usoDoEstagio ? "" : " \xB7 provedor n\xE3o informou uso"}${aproveitou ? "" : " \xB7 SEM TEXTO, mantido o do est\xE1gio anterior"}`
                   );
                   await emit(stream, {
-                    type: "science_stage",
-                    role: estagio.role,
+                    type: "skill_stage",
+                    skillId: estagio.skillId,
+                    stageId: estagio.stageId,
                     label: estagio.label,
                     index: posicao + 1,
-                    total: cadeia.stages.length,
+                    total: cadeiaDeSkills.stages.length,
                     status: "done",
                     conversationId: conversation.id,
                     messageId: assistant.id
                   });
                 }
-                materialScience = texto2 || null;
-                const revisor = cadeia.stages[cadeia.stages.length - 1];
+                materialDasSkills = texto2 || null;
+                const etapaFinal = cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1];
                 await emit(stream, {
-                  type: "science_stage",
-                  role: revisor.role,
-                  label: revisor.label,
-                  index: cadeia.stages.length,
-                  total: cadeia.stages.length,
+                  type: "skill_stage",
+                  skillId: etapaFinal.skillId,
+                  stageId: etapaFinal.stageId,
+                  label: etapaFinal.label,
+                  index: cadeiaDeSkills.stages.length,
+                  total: cadeiaDeSkills.stages.length,
                   status: "start",
                   conversationId: conversation.id,
                   messageId: assistant.id
                 });
               }
-              const mensagens = cadeia ? [
-                // O revisor recebe o prompt DELE no lugar do prompt padrão:
-                // as regras de artefato continuam (vêm do extras), mas quem
-                // manda no turno é o papel de revisão.
-                { role: "system", content: cadeia.stages[cadeia.stages.length - 1].systemPrompt(formatoScience) },
+              const mensagens = cadeiaDeSkills ? [
+                { role: "system", content: cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1].systemPrompt() },
                 ...context.messages.filter((m) => m.role !== "system"),
-                ...materialScience ? [{
+                ...materialDasSkills ? [{
                   role: "user",
-                  content: handoffMessage("revisao", estimateTokens(materialScience) > Math.floor(selection.model.ctx * 0.5) ? materialScience.slice(0, Math.floor(selection.model.ctx * 0.5) * 4) : materialScience)
+                  content: cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1].handoffMessage(estimateTokens(materialDasSkills) > Math.floor(selection.model.ctx * 0.5) ? materialDasSkills.slice(0, Math.floor(selection.model.ctx * 0.5) * 4) : materialDasSkills)
                 }] : []
               ] : [...context.messages];
               const citacoes = /* @__PURE__ */ new Map();
@@ -6546,6 +6595,20 @@ _Limite de ${MAX_SEARCH_ROUNDS} buscas por resposta atingido._
 assistant: ${turnoDoModelo}
 user: ${devolutiva}`;
               }
+              if (cadeiaDeSkills) {
+                const etapaFinal = cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1];
+                await emit(stream, {
+                  type: "skill_stage",
+                  skillId: etapaFinal.skillId,
+                  stageId: etapaFinal.stageId,
+                  label: etapaFinal.label,
+                  index: cadeiaDeSkills.stages.length,
+                  total: cadeiaDeSkills.stages.length,
+                  status: "done",
+                  conversationId: conversation.id,
+                  messageId: assistant.id
+                });
+              }
               await finishParser(stream);
               await ensureGeneratedSpreadsheetText(stream);
               await trace(
@@ -6554,10 +6617,10 @@ user: ${devolutiva}`;
                 "resposta conclu\xEDda",
                 `${content.length} caracteres \xB7 ${producedVersions.length} artefato(s) \xB7 ${usoPorRound.length} chamada(s) ao provedor`
               );
-              if (cadeia && producedVersions.length === 0 && content.trim().length >= MIN_SCIENCE_ARTIFACT_CHARS) {
+              const artifactOutput = cadeiaDeSkills?.output.artifact;
+              if (artifactOutput && producedVersions.length === 0 && content.trim().length >= artifactOutput.minChars) {
                 const documento = content.trim();
-                const kind = formatoScience === "latex" ? "code" : "markdown";
-                const language = formatoScience === "latex" ? "latex" : null;
+                const { kind, language } = artifactOutput;
                 const primeiraLinha = documento.split("\n").find((linha) => linha.trim()) ?? "";
                 const title = primeiraLinha.replace(/^#{1,6}\s+/u, "").replace(/^\\(?:title|section|chapter)\s*\{([^{}]*)\}.*$/u, "$1").trim().slice(0, 110) || "Documento";
                 const slug = "documento";
@@ -6610,11 +6673,11 @@ ${artifactMarker(slug, versao)}`;
                   `${kind}${language ? `/${language}` : ""} \xB7 v${versao} \xB7 ${documento.length} caracteres`
                 );
               }
-              if (cadeia && producedVersions.length > 0) {
+              if (artifactOutput && producedVersions.length > 0) {
                 const marcadores = producedVersions.map((item) => artifactMarker(item.slug, item.version));
                 let prosa = content;
                 for (const marcador of marcadores) prosa = prosa.split(marcador).join("");
-                if (prosa.trim().length > MAX_SCIENCE_PROSE_CHARS) {
+                if (prosa.trim().length > artifactOutput.maxProseChars) {
                   const apresentacao = prosa.trim().split(/(?<=[.!?])\s+/u).slice(0, 2).join(" ").slice(0, 320);
                   content = `${apresentacao}
 

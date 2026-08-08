@@ -8,7 +8,7 @@
     <meta name="description" content="Chat self-hosted para modelos open-weight com custo por mensagem." />
     <script type="module">
       if (import.meta.env.DEV) {
-        import('react-grab');
+        import("react-grab").then((m) => m.init({"activationMode":"toggle","allowActivationInsideInput":true,"maxContextLines":3}));
       }
     </script>
     <title>Open Weight Chat</title>

@@ -277,21 +277,53 @@ export const SseSearchEndSchema = SseBaseSchema.extend({
   failure: z.string().max(300).nullable().optional(),
 });
 
-export const ScienceLevelSchema = z.enum(['off', 'basic', 'intermediate', 'advanced']);
-export type ScienceLevel = z.infer<typeof ScienceLevelSchema>;
+/**
+ * Skills são extensões compostas por um ou mais estágios do modelo.
+ *
+ * Cada nova skill entra aqui com seu identificador e seu schema de settings;
+ * o restante do chat trabalha apenas com esta seleção genérica. Assim, uma
+ * skill nova não precisa criar outro "modo" transversal no banco, na API e
+ * no streaming.
+ */
+export const SkillIdSchema = z.enum(['science']);
+export type SkillId = z.infer<typeof SkillIdSchema>;
 
-/** Formato do documento produzido. Perguntado uma vez por conversa. */
-export const ScienceFormatSchema = z.enum(['markdown', 'latex']);
-export type ScienceFormat = z.infer<typeof ScienceFormatSchema>;
+/** Configuração própria da primeira skill registrada: escrita acadêmica. */
+export const ScienceSkillFormatSchema = z.enum(['markdown', 'latex']);
+export type ScienceSkillFormat = z.infer<typeof ScienceSkillFormatSchema>;
 
-/** Papel de um agente na cadeia. */
-export const ScienceRoleSchema = z.enum(['pesquisa', 'aprofundamento', 'sintese', 'ilustracao', 'revisao']);
-export type ScienceRole = z.infer<typeof ScienceRoleSchema>;
+export const ScienceSkillSelectionSchema = z.object({
+  id: z.literal('science'),
+  settings: z.object({
+    format: ScienceSkillFormatSchema.default('markdown'),
+  }).default({ format: 'markdown' }),
+});
 
-/** Progresso da cadeia, para a interface mostrar em que passo está. */
-export const SseScienceStageSchema = SseBaseSchema.extend({
-  type: z.literal('science_stage'),
-  role: ScienceRoleSchema,
+export const SkillSelectionSchema = z.discriminatedUnion('id', [ScienceSkillSelectionSchema]);
+export type SkillSelection = z.infer<typeof SkillSelectionSchema>;
+
+/**
+ * Conjunto ordenado: a ordem é a ordem em que as skills entregam material à
+ * próxima. O refinamento torna a seleção determinística e impede rodar a
+ * mesma skill duas vezes por engano.
+ */
+export const SkillSelectionsSchema = z.array(SkillSelectionSchema).max(8).superRefine((skills, context) => {
+  const seen = new Set<SkillId>();
+  for (const [index, skill] of skills.entries()) {
+    if (seen.has(skill.id)) {
+      context.addIssue({ code: 'custom', message: `A skill "${skill.id}" foi selecionada mais de uma vez.`, path: [index, 'id'] });
+      return;
+    }
+    seen.add(skill.id);
+  }
+});
+export type SkillSelections = z.infer<typeof SkillSelectionsSchema>;
+
+/** Progresso de uma skill, para a interface mostrar em que passo ela está. */
+export const SseSkillStageSchema = SseBaseSchema.extend({
+  type: z.literal('skill_stage'),
+  skillId: SkillIdSchema,
+  stageId: z.string().min(1).max(80),
   label: z.string().min(1).max(120),
   index: z.number().int().positive(),
   total: z.number().int().positive(),
@@ -311,9 +343,10 @@ export const SseScienceStageSchema = SseBaseSchema.extend({
  *
  * O texto NÃO vira a resposta: quem escreve na tela é só o revisor.
  */
-export const SseScienceDeltaSchema = SseBaseSchema.extend({
-  type: z.literal('science_delta'),
-  role: ScienceRoleSchema,
+export const SseSkillDeltaSchema = SseBaseSchema.extend({
+  type: z.literal('skill_delta'),
+  skillId: SkillIdSchema,
+  stageId: z.string().min(1).max(80),
   index: z.number().int().positive(),
   text: z.string(),
   /**
@@ -340,7 +373,7 @@ export const SseScienceDeltaSchema = SseBaseSchema.extend({
  */
 export const SseTraceSchema = SseBaseSchema.extend({
   type: z.literal('trace'),
-  /** De onde veio: `chat`, `science`, `busca`, `provedor`, `artefato`. */
+  /** De onde veio: `chat`, `skill`, `busca`, `provedor`, `artefato`. */
   scope: z.string().min(1).max(24),
   event: z.string().min(1).max(80),
   /** Números e rótulos curtos. Sem texto do modelo. */
@@ -355,8 +388,8 @@ export const SseEnvelopeSchema = z.discriminatedUnion('type', [
   SseUsageSchema,
   SseErrorSchema,
   SseDoneSchema,
-  SseScienceStageSchema,
-  SseScienceDeltaSchema,
+  SseSkillStageSchema,
+  SseSkillDeltaSchema,
   SseTraceSchema,
   SseSearchStartSchema,
   SseSearchEndSchema,
@@ -594,19 +627,6 @@ export const ArtifactEditSchema = z.object({
   content: z.string().max(512 * 1024),
 });
 
-/**
- * Modo Science: uma cadeia de agentes em vez de uma resposta só.
- *
- * É uma configuração SEPARADA do nível de esforço, e de propósito: esforço
- * regula quanto um modelo pensa antes de responder; o nível aqui regula
- * QUANTAS passagens diferentes o texto sofre, cada uma com um papel próprio.
- * As duas se combinam — dá para usar esforço alto numa cadeia de dois
- * agentes, e o contrário também.
- *
- * O preço é linear no número de agentes: cada estágio é uma chamada cobrada.
- * A interface diz isso antes de rodar, porque a diferença entre o nível 1 e o
- * 3 é de duas para cinco chamadas sobre um texto longo.
- */
 export const ChatRequestSchema = z.object({
   conversationId: z.string().min(1).nullable().optional(),
   content: z.string().trim().min(1, 'A mensagem não pode ficar vazia.').max(200_000),
@@ -639,9 +659,8 @@ export const ChatRequestSchema = z.object({
   attachmentIds: z.array(z.string().min(1)).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
   /** Intervalo escolhido na grade para esta pergunta; o servidor lê os dados. */
   spreadsheetSelection: SpreadsheetSelectionSchema.optional(),
-  /** Ausente ou `off` mantém a resposta normal, de um agente só. */
-  scienceLevel: ScienceLevelSchema.optional(),
-  scienceFormat: ScienceFormatSchema.optional(),
+  /** Ausente preserva a seleção salva na conversa; [] responde normalmente. */
+  skills: SkillSelectionsSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
@@ -651,6 +670,7 @@ export const CreateConversationSchema = z.object({
   modelId: z.string().trim().min(1).max(200).optional(),
   systemPrompt: z.string().max(100_000).nullable().optional(),
   effort: EffortLevelSchema.optional(),
+  skills: SkillSelectionsSchema.optional(),
 });
 export type CreateConversationInput = z.infer<typeof CreateConversationSchema>;
 
@@ -660,6 +680,7 @@ export const UpdateConversationSchema = z.object({
   modelId: z.string().trim().min(1).max(200).optional(),
   systemPrompt: z.string().max(100_000).nullable().optional(),
   effort: EffortLevelSchema.optional(),
+  skills: SkillSelectionsSchema.optional(),
   archived: z.boolean().optional(),
 });
 export type UpdateConversationInput = z.infer<typeof UpdateConversationSchema>;
@@ -683,10 +704,8 @@ export const MessageSchema = z.object({
 export type Message = z.infer<typeof MessageSchema>;
 
 export const ConversationSummarySchema = z.object({
-  /** Cadeia de agentes desta conversa. `off` é o estado de quem não usa. */
-  scienceLevel: ScienceLevelSchema.optional(),
-  /** Formato escolhido uma vez, na primeira mensagem em modo Science. */
-  scienceFormat: ScienceFormatSchema.optional(),
+  /** Skills ativas nesta conversa, na ordem de execução. */
+  skills: SkillSelectionsSchema.default([]),
   id: z.string().min(1),
   title: z.string().nullable(),
   providerId: ProviderIdSchema,

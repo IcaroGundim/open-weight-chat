@@ -153,6 +153,14 @@ function stripComments(source: string): string {
     .join('\n');
 }
 
+/** Alguns provedores escapam UTF-8 como JSON dentro do LaTeX (por exemplo,
+ * \u00a0). Não é sintaxe TeX; convertê-la aqui impede que \u vire um comando
+ * "desconhecido" e que o hexadecimal fique visível no texto. */
+function decodeUnicodeEscapes(source: string): string {
+  return source.replace(/\\u([0-9a-fA-F]{4})/gu, (_todo, hexadecimal: string) =>
+    String.fromCodePoint(Number.parseInt(hexadecimal, 16)));
+}
+
 function firstArgument(source: string, name: string): string | null {
   const at = source.indexOf(`\\${name}`);
   if (at < 0) return null;
@@ -280,7 +288,11 @@ function protect(source: string): { texto: string; protegidos: Protegido[] } {
 
   // Delimitadores soltos, do mais longo para o mais curto.
   texto = texto.replace(/\$\$([\s\S]*?)\$\$/gu, (_todo, corpo: string) => guardar(`\n\n$$\n${corpo.trim()}\n$$\n\n`));
-  texto = texto.replace(/\\\[([\s\S]*?)\\\]/gu, (_todo, corpo: string) => guardar(`\n\n$$\n${corpo.trim()}\n$$\n\n`));
+  // O LaTeX usa \\[0.4ex] para uma quebra de linha com espaço opcional.
+  // Sem a guarda, a expressão começava na segunda barra e confundia isso com
+  // \\[ (matemática de bloco), protegendo tudo até o próximo \\] como fórmula.
+  // Esse padrão é especialmente comum em títulos centralizados.
+  texto = texto.replace(/(?<!\\)\\\[([\s\S]*?)\\\]/gu, (_todo, corpo: string) => guardar(`\n\n$$\n${corpo.trim()}\n$$\n\n`));
   texto = texto.replace(/\\\(([\s\S]*?)\\\)/gu, (_todo, corpo: string) => guardar(`$${corpo.trim()}$`));
   // `$...$` por último e sem cruzar linha em branco: um `$` órfão não pode
   // engolir o resto do documento.
@@ -387,6 +399,14 @@ const DESCARTAVEIS = [
   'label', 'index', 'vspace', 'hspace', 'newpage', 'clearpage', 'pagebreak',
   'centering', 'raggedright', 'noindent', 'bibliographystyle', 'maketitle',
   'tableofcontents', 'listoffigures', 'listoftables',
+  // Declarações de tamanho, peso, família e inclinação só controlam a
+  // tipografia do PDF. O Markdown já tem sua própria apresentação.
+  'tiny', 'scriptsize', 'footnotesize', 'small', 'normalsize', 'large',
+  'Large', 'LARGE', 'huge', 'Huge', 'bfseries', 'mdseries', 'itshape',
+  'slshape', 'scshape', 'upshape', 'rmfamily', 'sffamily', 'ttfamily',
+  // \u{a} é tratado acima como acento; se restar um \u sem argumento válido,
+  // preservamos o texto seguinte sem exibir um aviso técnico.
+  'u',
 ];
 
 /**
@@ -429,7 +449,7 @@ function removerComandosDesconhecidos(source: string, registro: Set<string>): st
 }
 
 export function latexToMarkdown(source: string): LatexDocument {
-  const limpo = stripComments(source);
+  const limpo = decodeUnicodeEscapes(stripComments(source));
 
   const inicio = limpo.indexOf('\\begin{document}');
   const fim = limpo.lastIndexOf('\\end{document}');
@@ -538,6 +558,14 @@ export function latexToMarkdown(source: string): LatexDocument {
   // `\title` caía aqui.
   corpo = removerComandosDesconhecidos(corpo, unsupported);
   corpo = corpo.replace(/\\begin\{[^}]*\}|\\end\{[^}]*\}/gu, '');
+  // Declarações tipográficas de escopo, como {\Large\bfseries Título},
+  // deixam chaves de agrupamento depois que os comandos são removidos. Fora
+  // da matemática (ainda protegida), as chaves não têm semântica visual.
+  for (let passada = 0; passada < 8; passada += 1) {
+    const semGrupo = corpo.replace(/(?<!\\)\{([^{}]*)\}/gu, '$1');
+    if (semGrupo === corpo) break;
+    corpo = semGrupo;
+  }
 
   const markdown = restore(corpo, protegidos)
     // Linha só de espaços vira linha vazia. Não pode ser um trim geral de fim

@@ -88,6 +88,32 @@ describe('cliente SSE do chat', () => {
     );
   });
 
+  it('normaliza progresso e rascunho de uma skill sem conhecer sua implementação', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      'event: skill_stage\n' +
+      'data: {"type":"skill_stage","skillId":"science","stageId":"pesquisa","label":"Levantamento","index":1,"total":2,"status":"start"}\n\n' +
+      'event: skill_delta\n' +
+      'data: {"type":"skill_delta","skillId":"science","stageId":"pesquisa","index":1,"text":"rascunho"}\n\n' +
+      'event: skill_delta\n' +
+      'data: {"type":"skill_delta","skillId":"science","stageId":"pesquisa","index":1,"text":"pensando","reasoning":true}\n\n' +
+      'event: done\n' +
+      'data: {"type":"done"}\n\n',
+      { headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const stages: string[] = [];
+    const drafts: Array<{ text: string; reasoning: string }> = [];
+    await streamChat(
+      { conversationId: 'c1', content: 'oi', providerId: 'ollama', modelId: 'llama3.2' },
+      {
+        onSkillStage: (stage) => stages.push(`${stage.skillId}/${stage.stageId}:${stage.status}`),
+        onSkillDelta: (draft) => drafts.push({ text: draft.text, reasoning: draft.reasoning }),
+      },
+      new AbortController().signal,
+    );
+    expect(stages).toEqual(['science/pesquisa:start']);
+    expect(drafts).toEqual([{ text: 'rascunho', reasoning: '' }, { text: '', reasoning: 'pensando' }]);
+  });
+
   it('entrega a planilha nativa criada durante o stream', async () => {
     const attachment = { id: 'sheet-1', kind: 'spreadsheet', filename: 'pg.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sizeBytes: 1200, textChars: null, truncated: false, spreadsheet: { sheetNames: ['PG'], version: 1 }, createdAt: 10 };
     vi.stubGlobal('fetch', vi.fn(async () => new Response(

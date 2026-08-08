@@ -90,8 +90,8 @@ export function ChatView() {
   const setSelectedModel = useChatStore((state) => state.setSelectedModel);
   const setEffort = useChatStore((state) => state.setEffort);
   const pendingEffort = useChatStore((state) => state.pendingEffort);
-  const pendingScience = useChatStore((state) => state.pendingScience);
-  const setScience = useChatStore((state) => state.setScience);
+  const pendingSkills = useChatStore((state) => state.pendingSkills);
+  const setSkills = useChatStore((state) => state.setSkills);
   const defaultEffort = useSettingsStore((state) => state.defaultEffort);
   const clearError = useChatStore((state) => state.clearError);
   const openArtifactSelection = useChatStore((state) => state.openArtifactSelection);
@@ -105,10 +105,9 @@ export function ChatView() {
   // Conversa aberta manda; sem conversa ainda, mostra o que a próxima vai
   // nascer usando — a escolha pendente, ou o padrão das Configurações.
   const activeEffort = activeConversation?.effort ?? pendingEffort ?? defaultEffort;
-  // Mesma regra do esforço: a escolha pendente vale enquanto não há conversa;
+  // Mesma regra do esforço: a seleção pendente vale enquanto não há conversa;
   // depois, quem manda é a conversa aberta.
-  const scienceLevel = pendingScience?.level ?? activeConversation?.scienceLevel ?? 'off';
-  const scienceFormat = pendingScience?.format ?? activeConversation?.scienceFormat ?? 'markdown';
+  const skills = pendingSkills ?? activeConversation?.skills ?? [];
   const totalCost = useMemo(
     () => activeConversation?.totalCostUsd ?? messages.reduce((sum, message) => sum + (message.costUsd ?? message.usage?.costUsd ?? 0), 0),
     [activeConversation?.totalCostUsd, messages],
@@ -312,9 +311,8 @@ export function ChatView() {
             disabled={!canSend}
             effort={activeEffort}
             onEffortChange={setEffort}
-            scienceLevel={scienceLevel}
-            scienceFormat={scienceFormat}
-            onScienceChange={setScience}
+            skills={skills}
+            onSkillsChange={setSkills}
           />
           <p className="privacy-note">As chaves ficam no servidor e o Markdown é renderizado sem HTML cru.</p>
         </div>

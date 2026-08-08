@@ -55,6 +55,26 @@ describe('ChatDatabase', () => {
     }
   });
 
+  it('persiste a seleção ordenada de skills na conversa', () => {
+    const database = new ChatDatabase(':memory:');
+    try {
+      const skills = [{ id: 'science' as const, settings: { format: 'latex' as const } }];
+      const conversation = database.createConversation(USER_A, {
+        providerId: 'ollama',
+        modelId: 'llama3.2',
+        skills,
+      });
+      expect(conversation.skills).toEqual(skills);
+
+      const updated = database.updateConversation(USER_A, conversation.id, {
+        skills: [{ id: 'science', settings: { format: 'markdown' } }],
+      });
+      expect(updated?.skills).toEqual([{ id: 'science', settings: { format: 'markdown' } }]);
+    } finally {
+      database.close();
+    }
+  });
+
   it('isola conversas, mensagens, custos e provedores entre usuários no mesmo banco', () => {
     const database = new ChatDatabase(':memory:');
     try {

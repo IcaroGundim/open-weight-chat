@@ -2,8 +2,9 @@ import { ApiError, authHeaders } from './token-provider';
 import { isEffortLevel } from './types';
 import type {
   Attachment,
-  ScienceDraft,
-  ScienceStageEvent,
+  SkillDraft,
+  SkillSelection,
+  SkillStageEvent,
   TraceEvent,
   ChatMessage,
   ChatRequest,
@@ -184,7 +185,17 @@ function normalizeConversation(value: unknown, index: number): Conversation | nu
     messageCount: asNumber(value.message_count ?? value.messageCount),
     archived: typeof value.archived === 'boolean' ? value.archived : undefined,
     effort: isEffortLevel(value.effort) ? value.effort : undefined,
+    skills: normalizeSkills(value.skills),
   };
+}
+
+function normalizeSkills(value: unknown): SkillSelection[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((skill) => {
+    if (!isRecord(skill) || skill.id !== 'science') return [];
+    const settings = isRecord(skill.settings) ? skill.settings : {};
+    return [{ id: 'science' as const, settings: { format: settings.format === 'latex' ? 'latex' as const : 'markdown' as const } }];
+  });
 }
 
 const artifactKinds: ArtifactKind[] = ['markdown', 'code', 'svg', 'mermaid', 'mindmap', 'chart'];
@@ -556,6 +567,7 @@ export async function createConversation(input: {
   providerId?: string;
   modelId?: string;
   effort?: EffortLevel;
+  skills?: SkillSelection[];
 }): Promise<Conversation> {
   const payload = await requestJson('/api/conversations', {
     method: 'POST',
@@ -565,6 +577,7 @@ export async function createConversation(input: {
       providerId: input.providerId,
       modelId: input.modelId,
       effort: input.effort,
+      skills: input.skills,
     }),
   });
   const conversation = normalizeConversation(unwrapPayload(payload, ['conversation', 'data']), 0);
@@ -639,9 +652,9 @@ export interface ChatStreamHandlers {
   onArtifactDelta?: (artifact: ArtifactDeltaEnvelope) => void;
   onArtifactEnd?: (artifact: ArtifactEndEnvelope) => void;
   onSpreadsheetReady?: (event: SpreadsheetReadyEnvelope) => void;
-  onScienceStage?: (stage: ScienceStageEvent) => void;
+  onSkillStage?: (stage: SkillStageEvent) => void;
   onTrace?: (event: TraceEvent) => void;
-  onScienceDelta?: (draft: ScienceDraft) => void;
+  onSkillDelta?: (draft: SkillDraft) => void;
   onSearchStart?: (search: SearchStartEnvelope) => void;
   onSearchEnd?: (search: SearchEndEnvelope) => void;
   onUsage?: (usage: Usage) => void;
@@ -906,31 +919,35 @@ export async function streamChat(
       });
       return;
     }
-    if (type === 'science_delta') {
-      const role = asString(envelope.role) as ScienceDraft['role'];
+    if (type === 'skill_delta') {
+      const skillId = asString(envelope.skillId) as SkillDraft['skillId'];
+      const stageId = asString(envelope.stageId);
       const text = asString(envelope.text);
-      if (!role || !text) return;
+      if (!skillId || !stageId || !text) return;
       // `StreamEnvelope.reasoning` já é declarado como string (o campo do
       // envelope de raciocínio comum), então a leitura precisa ignorar esse
       // tipo em vez de comparar contra ele.
       const ehRaciocinio = (envelope as Record<string, unknown>).reasoning === true;
-      handlers.onScienceDelta?.({
-        role,
+      handlers.onSkillDelta?.({
+        skillId,
+        stageId,
         index: asNumber(envelope.index) ?? 1,
         text: ehRaciocinio ? '' : text,
         reasoning: ehRaciocinio ? text : '',
       });
       return;
     }
-    if (type === 'science_stage') {
+    if (type === 'skill_stage') {
       // `flush()` antes, como na busca: o progresso não pode aparecer acima do
       // texto que já tinha sido escrito.
       flush();
       const label = asString(envelope.label);
-      const role = asString(envelope.role) as ScienceStageEvent['role'];
-      if (!label || !role) return;
-      handlers.onScienceStage?.({
-        role,
+      const skillId = asString(envelope.skillId) as SkillStageEvent['skillId'];
+      const stageId = asString(envelope.stageId);
+      if (!label || !skillId || !stageId) return;
+      handlers.onSkillStage?.({
+        skillId,
+        stageId,
         label,
         index: asNumber(envelope.index) ?? 1,
         total: asNumber(envelope.total) ?? 1,

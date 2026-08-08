@@ -60,7 +60,7 @@ import {
   toSearchSettingsResponse,
 } from './search';
 import { createPassthroughScanner, createSearchScanner, searchSystemPrompt } from './search/protocol';
-import { handoffMessage, scienceChain } from './science/levels';
+import { resolveSkillChain } from './skills';
 import { analyzeAttachment, decodeAttachment, documentPromptBlock, imageDataUrl } from './attachments';
 import { generatedSpreadsheetFromArtifact, spreadsheetPromptBlock, workbookSheetToCsv, workbookToXlsx } from './spreadsheets';
 
@@ -92,21 +92,6 @@ const MAX_SEARCH_ROUNDS = 3;
  */
 const MAX_DESCARTE_APOS_MARCADOR = 4_000;
 
-/**
- * A partir de quanto texto o modo Science guarda a resposta num artefato.
- *
- * Abaixo disso é resposta de conversa, e o artefato só atrapalharia — um
- * parágrafo dentro de um painel com versionamento é cerimônia sem função.
- */
-const MIN_SCIENCE_ARTIFACT_CHARS = 1_200;
-
-/**
- * Quanta prosa o modo Science pode deixar FORA do artefato.
- *
- * O prompt pede duas frases; isto é o teto do que se tolera antes de assumir
- * que o modelo repetiu o documento no corpo da mensagem.
- */
-const MAX_SCIENCE_PROSE_CHARS = 600;
 import { pickDefaultRateLimitStore, type RateLimitStore } from './rate-limit';
 
 // Node 24 can load the local .env without adding a dotenv dependency. Existing
@@ -869,6 +854,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
         modelId,
         systemPrompt: body.systemPrompt,
         effort: body.effort,
+        skills: body.skills,
       });
       return c.json({ conversation }, 201);
     } catch (error) {
@@ -1024,6 +1010,7 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
           providerId: selection.provider.id,
           modelId: selection.model.id,
           effort: request.effort,
+          skills: request.skills,
         });
       } else if (
         conversation.providerId !== selection.provider.id
@@ -1084,16 +1071,13 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
         lista.push(anexo);
         anexosPorMensagem.set(anexo.messageId, lista);
       }
-      // Modo Science: nível e formato acompanham a conversa, como o esforço.
-      // Vindo no envio, sincroniza; ausente, mantém o que já estava — assim um
-      // cliente antigo não desliga o modo sem querer.
-      const nivelScience = request.scienceLevel ?? conversation.scienceLevel ?? 'off';
-      const formatoScience = request.scienceFormat ?? conversation.scienceFormat ?? 'markdown';
-      const cadeia = scienceChain(nivelScience);
-      if (request.scienceLevel !== undefined || request.scienceFormat !== undefined) {
+      // Skills acompanham a conversa como o esforço. A ausência preserva a
+      // seleção existente; [] é uma escolha explícita de resposta normal.
+      const skills = request.skills ?? conversation.skills;
+      const cadeiaDeSkills = resolveSkillChain(skills);
+      if (request.skills !== undefined && JSON.stringify(request.skills) !== JSON.stringify(conversation.skills)) {
         const atualizada = await db.updateConversation(userId, conversation.id, {
-          scienceLevel: nivelScience,
-          scienceFormat: formatoScience,
+          skills,
         });
         if (atualizada) conversation = atualizada;
       }
@@ -1492,34 +1476,28 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
             try {
               await trace(stream, 'chat', 'turno iniciado',
                 `${selection.provider.id}/${selection.model.id} · esforço ${conversation.effort}`
-                + ` · science ${nivelScience}${cadeia ? ` (${cadeia.stages.length} agentes, ${formatoScience})` : ''}`
+                + ` · skills ${skills.length > 0 ? skills.map((skill) => skill.id).join(', ') : 'nenhuma'}${cadeiaDeSkills ? ` (${cadeiaDeSkills.stages.length} estágios)` : ''}`
                 + ` · busca ${busca ? 'ligada' : 'desligada'} · contexto ${context.messages.length} mensagens`
                 + `${context.truncated ? ' (aparado)' : ''}`);
 
-              /**
-               * Modo Science: a mesma pergunta passa por vários agentes, cada
-               * um com prompt de sistema próprio, e só o ÚLTIMO escreve na
-               * tela. Os intermediários rodam sem emitir texto — o usuário vê
-               * o progresso por estágio, não três versões do mesmo documento
-               * se sobrepondo.
-               *
-               * Roda ANTES do laço normal, e o resultado entra como material
-               * do turno final. Assim tudo o que já existe (artefatos, busca,
-               * anexos) continua valendo para a última passagem.
-               */
-              let materialScience: string | null = null;
+              // Skills executam seus estágios em sequência; só o último
+              // escreve a resposta final. O material de um estágio é entregue
+              // ao próximo, portanto qualquer skill futura compõe com as
+              // anteriores sem um caminho especial no chat.
+              let materialDasSkills: string | null = null;
               /** Estágios que caíram; ditos ao usuário no fim, não escondidos. */
               const falhasDeEstagio: string[] = [];
-              if (cadeia) {
-                const intermediarios = cadeia.stages.slice(0, -1);
+              if (cadeiaDeSkills) {
+                const intermediarios = cadeiaDeSkills.stages.slice(0, -1);
                 let texto = '';
                 for (const [posicao, estagio] of intermediarios.entries()) {
                   await emit(stream, {
-                    type: 'science_stage',
-                    role: estagio.role,
+                    type: 'skill_stage',
+                    skillId: estagio.skillId,
+                    stageId: estagio.stageId,
                     label: estagio.label,
                     index: posicao + 1,
-                    total: cadeia.stages.length,
+                    total: cadeiaDeSkills.stages.length,
                     status: 'start',
                     conversationId: conversation.id,
                     messageId: assistant.id,
@@ -1543,9 +1521,9 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                     : texto;
 
                   const entrada: ContextMessage[] = [
-                    { role: 'system', content: estagio.systemPrompt(formatoScience) },
+                    { role: 'system', content: estagio.systemPrompt() },
                     ...context.messages.filter((m) => m.role !== 'system'),
-                    ...(textoOrcado ? [{ role: 'user' as const, content: handoffMessage(estagio.role, textoOrcado) }] : []),
+                    ...(textoOrcado ? [{ role: 'user' as const, content: estagio.handoffMessage(textoOrcado) }] : []),
                   ];
 
                   let produzido = '';
@@ -1553,8 +1531,8 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                   let ultimoSinalDeVida = Date.now();
                   let caracteresDeRaciocinio = 0;
                   const comecouEm = Date.now();
-                  await trace(stream, 'science', `agente ${posicao + 1}/${cadeia.stages.length} iniciado`,
-                    `${estagio.role} · entrada ${estimateTokens(entrada.map((m) => m.content).join('\n'))} tokens estimados`);
+                  await trace(stream, 'skill', `estágio ${posicao + 1}/${cadeiaDeSkills.stages.length} iniciado`,
+                    `${estagio.skillId}/${estagio.stageId} · entrada ${estimateTokens(entrada.map((m) => m.content).join('\n'))} tokens estimados`);
                   /**
                    * A falha de um estágio NÃO derruba a cadeia.
                    *
@@ -1584,8 +1562,9 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                       // Repassado como bastidor: o usuário acompanha, e a
                       // conexão não fica minutos em silêncio.
                       await emit(stream, {
-                        type: 'science_delta',
-                        role: estagio.role,
+                        type: 'skill_delta',
+                        skillId: estagio.skillId,
+                        stageId: estagio.stageId,
                         index: posicao + 1,
                         text: evento.text,
                         conversationId: conversation.id,
@@ -1610,8 +1589,9 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                       // agente. Vai só como sinal de vida e de progresso.
                       caracteresDeRaciocinio += evento.reasoning.length;
                       await emit(stream, {
-                        type: 'science_delta',
-                        role: estagio.role,
+                        type: 'skill_delta',
+                        skillId: estagio.skillId,
+                        stageId: estagio.stageId,
                         index: posicao + 1,
                         text: evento.reasoning,
                         reasoning: true,
@@ -1627,42 +1607,44 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                     if (clientAborted || upstreamController.signal.aborted) throw falha;
                     const motivo = normalizeError(falha);
                     falhasDeEstagio.push(`${estagio.label}: ${motivo.message}`);
-                    await trace(stream, 'science', `agente ${posicao + 1}/${cadeia.stages.length} FALHOU`,
+                    await trace(stream, 'skill', `estágio ${posicao + 1}/${cadeiaDeSkills.stages.length} FALHOU`,
                       `${motivo.code} · ${motivo.message}`);
                     // Sem texto nenhum até aqui, não há o que revisar.
                     if (!texto.trim() && !produzido.trim()) throw falha;
                   }
 
                   usoPorRound.push(usoDoEstagio);
-                  promptText += `\n${estagio.role}: ${entrada.map((m) => m.content).join('\n')}`;
+                  promptText += `\n${estagio.skillId}/${estagio.stageId}: ${entrada.map((m) => m.content).join('\n')}`;
                   const aproveitou = produzido.trim().length > 0;
                   texto = produzido.trim() || texto;
-                  await trace(stream, 'science', `agente ${posicao + 1}/${cadeia.stages.length} concluído`,
+                  await trace(stream, 'skill', `estágio ${posicao + 1}/${cadeiaDeSkills.stages.length} concluído`,
                     `${((Date.now() - comecouEm) / 1000).toFixed(1)}s · ${produzido.length} caracteres`
                     + `${caracteresDeRaciocinio > 0 ? ` · ${caracteresDeRaciocinio} de raciocínio` : ''}`
                     + `${usoDoEstagio ? '' : ' · provedor não informou uso'}`
                     + `${aproveitou ? '' : ' · SEM TEXTO, mantido o do estágio anterior'}`);
 
                   await emit(stream, {
-                    type: 'science_stage',
-                    role: estagio.role,
+                    type: 'skill_stage',
+                    skillId: estagio.skillId,
+                    stageId: estagio.stageId,
                     label: estagio.label,
                     index: posicao + 1,
-                    total: cadeia.stages.length,
+                    total: cadeiaDeSkills.stages.length,
                     status: 'done',
                     conversationId: conversation.id,
                     messageId: assistant.id,
                   });
                 }
-                materialScience = texto || null;
+                materialDasSkills = texto || null;
 
-                const revisor = cadeia.stages[cadeia.stages.length - 1];
+                const etapaFinal = cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1];
                 await emit(stream, {
-                  type: 'science_stage',
-                  role: revisor.role,
-                  label: revisor.label,
-                  index: cadeia.stages.length,
-                  total: cadeia.stages.length,
+                  type: 'skill_stage',
+                  skillId: etapaFinal.skillId,
+                  stageId: etapaFinal.stageId,
+                  label: etapaFinal.label,
+                  index: cadeiaDeSkills.stages.length,
+                  total: cadeiaDeSkills.stages.length,
                   status: 'start',
                   conversationId: conversation.id,
                   messageId: assistant.id,
@@ -1672,18 +1654,15 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
               // Rounds: o normal é um só. Cada busca pedida pelo modelo custa
               // um round a mais, porque a única forma de ele VER os resultados
               // é uma nova chamada ao provedor com eles no contexto.
-              const mensagens: ContextMessage[] = cadeia
+              const mensagens: ContextMessage[] = cadeiaDeSkills
                 ? [
-                  // O revisor recebe o prompt DELE no lugar do prompt padrão:
-                  // as regras de artefato continuam (vêm do extras), mas quem
-                  // manda no turno é o papel de revisão.
-                  { role: 'system', content: cadeia.stages[cadeia.stages.length - 1].systemPrompt(formatoScience) },
+                  { role: 'system', content: cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1].systemPrompt() },
                   ...context.messages.filter((m) => m.role !== 'system'),
-                  ...(materialScience ? [{
+                  ...(materialDasSkills ? [{
                     role: 'user' as const,
-                    content: handoffMessage('revisao', estimateTokens(materialScience) > Math.floor(selection.model.ctx * 0.5)
-                      ? materialScience.slice(0, Math.floor(selection.model.ctx * 0.5) * 4)
-                      : materialScience),
+                    content: cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1].handoffMessage(estimateTokens(materialDasSkills) > Math.floor(selection.model.ctx * 0.5)
+                      ? materialDasSkills.slice(0, Math.floor(selection.model.ctx * 0.5) * 4)
+                      : materialDasSkills),
                   }] : []),
                 ]
                 : [...context.messages];
@@ -1844,25 +1823,32 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                 promptText += `\nassistant: ${turnoDoModelo}\nuser: ${devolutiva}`;
               }
 
+              if (cadeiaDeSkills) {
+                const etapaFinal = cadeiaDeSkills.stages[cadeiaDeSkills.stages.length - 1];
+                await emit(stream, {
+                  type: 'skill_stage',
+                  skillId: etapaFinal.skillId,
+                  stageId: etapaFinal.stageId,
+                  label: etapaFinal.label,
+                  index: cadeiaDeSkills.stages.length,
+                  total: cadeiaDeSkills.stages.length,
+                  status: 'done',
+                  conversationId: conversation.id,
+                  messageId: assistant.id,
+                });
+              }
               await finishParser(stream);
               await ensureGeneratedSpreadsheetText(stream);
               await trace(stream, 'chat', 'resposta concluída',
                 `${content.length} caracteres · ${producedVersions.length} artefato(s) · ${usoPorRound.length} chamada(s) ao provedor`);
 
-              /**
-               * Rede de segurança do modo Science: documento longo VIRA
-               * artefato, mesmo que o modelo tenha ignorado a instrução.
-               *
-               * O prompt do revisor pede o artefato, mas prompt é pedido e não
-               * imposição — e aqui a diferença é grande: um documento de
-               * milhares de palavras solto no corpo da mensagem some no
-               * histórico, não versiona, não tem painel e não dá para baixar.
-               * Quando o modelo não abre a tag, o servidor abre por ele.
-               */
-              if (cadeia && producedVersions.length === 0 && content.trim().length >= MIN_SCIENCE_ARTIFACT_CHARS) {
+              // A skill final pode definir como sua saída vira artefato. O
+              // chat não precisa saber que é uma skill acadêmica nem conhecer
+              // seu formato para aplicar esta proteção.
+              const artifactOutput = cadeiaDeSkills?.output.artifact;
+              if (artifactOutput && producedVersions.length === 0 && content.trim().length >= artifactOutput.minChars) {
                 const documento = content.trim();
-                const kind = formatoScience === 'latex' ? 'code' : 'markdown';
-                const language = formatoScience === 'latex' ? 'latex' : null;
+                const { kind, language } = artifactOutput;
                 // Título tirado da primeira linha que parece título; sem isso o
                 // cartão viria com o slug, que não diz nada.
                 const primeiraLinha = documento.split('\n').find((linha) => linha.trim()) ?? '';
@@ -1908,27 +1894,13 @@ export function createApp(options: AppOptions = {}): Hono<{ Variables: AppVariab
                   `${kind}${language ? `/${language}` : ''} · v${versao} · ${documento.length} caracteres`);
               }
 
-              /**
-               * Modo Science: a mensagem fica curta, mesmo quando o artefato
-               * foi aberto pelo próprio modelo.
-               *
-               * O prompt manda escrever no máximo duas frases fora do
-               * artefato, e o revisor com frequência escreve o documento
-               * inteiro fora TAMBÉM — resultado: o texto aparece duplicado, e
-               * é o corpo da mensagem que o usuário lê primeiro. A rede de
-               * segurança acima não pegava esse caso, porque ali já existia
-               * artefato.
-               *
-               * Aqui a prosa é medida SEM os marcadores: o que sobra é o que
-               * o modelo escreveu solto. Passando do limite, vira uma linha
-               * apontando para o artefato — o documento não se perde, ele está
-               * no painel, versionado e com o texto íntegro.
-               */
-              if (cadeia && producedVersions.length > 0) {
+              // Skills que produzem documentos guardam no chat só a
+              // apresentação curta e o marcador do artefato, evitando cópias.
+              if (artifactOutput && producedVersions.length > 0) {
                 const marcadores = producedVersions.map((item) => artifactMarker(item.slug, item.version));
                 let prosa = content;
                 for (const marcador of marcadores) prosa = prosa.split(marcador).join('');
-                if (prosa.trim().length > MAX_SCIENCE_PROSE_CHARS) {
+                if (prosa.trim().length > artifactOutput.maxProseChars) {
                   // Guarda as duas primeiras frases, que costumam ser a
                   // apresentação legítima do documento.
                   const apresentacao = prosa.trim().split(/(?<=[.!?])\s+/u).slice(0, 2).join(' ').slice(0, 320);

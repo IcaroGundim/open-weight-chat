@@ -18,8 +18,7 @@ import { getUserId } from '../token-provider';
 import { useSettingsStore } from './settings';
 import type {
   Attachment,
-  ScienceFormat,
-  ScienceLevel,
+  SkillSelection,
   Artifact,
   ArtifactEndEnvelope,
   ArtifactStartEnvelope,
@@ -171,8 +170,8 @@ interface ChatState {
   deleteConversation: (id: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
   setEffort: (effort: EffortLevel) => Promise<void>;
-  setScience: (level: ScienceLevel, format?: ScienceFormat) => void;
-  pendingScience: { level: ScienceLevel; format: ScienceFormat } | null;
+  setSkills: (skills: SkillSelection[]) => void;
+  pendingSkills: SkillSelection[] | null;
   loadArtifacts: (conversationId: string) => Promise<void>;
   openArtifact: (selection: { slug: string; version: number }) => void;
   closeArtifact: () => void;
@@ -210,7 +209,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamController: null,
   streamAbortRequested: false,
   pendingEffort: null,
-  pendingScience: null,
+  pendingSkills: null,
   error: null,
 
   loadSearchAvailability: async () => {
@@ -314,10 +313,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectConversation: async (id) => {
     const epoch = sessionEpoch;
     if (!id) {
-      set({ activeConversationId: null, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, error: null });
+      set({ activeConversationId: null, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, pendingSkills: null, error: null });
       return;
     }
-    set({ activeConversationId: id, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, error: null });
+    set({ activeConversationId: id, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, pendingSkills: null, error: null });
     if (get().messagesLoaded[id]) return;
 
     set({ loadingConversationId: id });
@@ -339,7 +338,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, pendingEffort: null, error: null }),
+  newConversation: () => set({ activeConversationId: null, openArtifactSelection: null, openSpreadsheetId: null, pendingSpreadsheetSelection: null, pendingEffort: null, pendingSkills: null, error: null }),
 
   createConversation: async (title = 'Nova conversa') => {
     const epoch = sessionEpoch;
@@ -350,6 +349,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         providerId: selected?.providerId,
         modelId: selected?.id,
         effort: get().pendingEffort ?? useSettingsStore.getState().defaultEffort,
+        skills: get().pendingSkills ?? [],
       });
       if (!isCurrentSession(epoch)) return null;
       set((state) => ({
@@ -361,6 +361,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messagesByConversation: { ...state.messagesByConversation, [conversation.id]: [] },
         messagesLoaded: { ...state.messagesLoaded, [conversation.id]: true },
         pendingEffort: null,
+        pendingSkills: null,
         error: null,
       }));
       return conversation;
@@ -425,23 +426,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ selectedModelId: id });
   },
 
-  /**
-   * Escolha do modo Science antes do envio.
-   *
-   * Fica pendente no cliente e só é gravada na conversa quando a mensagem sai
-   * — do mesmo jeito que o esforço. Gravar antes criaria conversa vazia só
-   * porque alguém mexeu no seletor.
-   */
-  setScience: (level, format) => {
-    set((state) => ({
-      pendingScience: {
-        level,
-        format: format ?? state.pendingScience?.format
-          ?? state.conversations.find((c) => c.id === state.activeConversationId)?.scienceFormat
-          ?? 'markdown',
-      },
-    }));
-  },
+  /** A seleção fica pendente até o envio; em conversa existente, a UI já reflete a escolha. */
+  setSkills: (skills) => set((state) => ({
+    pendingSkills: skills,
+    conversations: state.activeConversationId
+      ? state.conversations.map((conversation) => conversation.id === state.activeConversationId ? { ...conversation, skills } : conversation)
+      : state.conversations,
+  })),
 
   setEffort: async (effort) => {
     const epoch = sessionEpoch;
@@ -676,9 +667,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               endColumn: spreadsheetSelection.endColumn,
             },
           } : {}),
-          ...(get().pendingScience ? {
-            scienceLevel: get().pendingScience!.level,
-            scienceFormat: get().pendingScience!.format,
+          ...(get().pendingSkills ? {
+            skills: get().pendingSkills!,
           } : {}),
         },
         {
@@ -686,29 +676,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...message,
             trace: [...(message.trace ?? []), evento],
           })),
-          onScienceDelta: (delta) => updateAssistant((message) => ({
+          onSkillDelta: (delta) => updateAssistant((message) => ({
             ...message,
             // Troca de agente zera o rascunho: o bastidor mostra o que está
             // sendo escrito AGORA, não a colagem de tudo que já passou.
-            scienceDraft: message.scienceDraft?.index === delta.index
+            skillDraft: message.skillDraft?.index === delta.index
               ? {
-                ...message.scienceDraft,
-                text: message.scienceDraft.text + delta.text,
-                reasoning: message.scienceDraft.reasoning + delta.reasoning,
+                ...message.skillDraft,
+                text: message.skillDraft.text + delta.text,
+                reasoning: message.skillDraft.reasoning + delta.reasoning,
               }
-              : { role: delta.role, index: delta.index, text: delta.text, reasoning: delta.reasoning },
+              : { skillId: delta.skillId, stageId: delta.stageId, index: delta.index, text: delta.text, reasoning: delta.reasoning },
           })),
-          onScienceStage: (stage) => updateAssistant((message) => {
+          onSkillStage: (stage) => updateAssistant((message) => {
             // Substitui o estágio de mesmo índice em vez de acumular: cada um
             // manda "start" e depois "done", e o que interessa é o estado
             // corrente de cada passo, não o histórico dos avisos.
-            const anteriores = (message.scienceStages ?? []).filter((s) => s.index !== stage.index);
-            return { ...message, scienceStages: [...anteriores, stage].sort((a, b) => a.index - b.index) };
+            const anteriores = (message.skillStages ?? []).filter((s) => s.index !== stage.index);
+            return { ...message, skillStages: [...anteriores, stage].sort((a, b) => a.index - b.index) };
           }),
           onText: (text) => updateAssistant((message) => ({
             ...message,
             // A resposta final começou: o bastidor sai de cena.
-            scienceDraft: undefined,
+            skillDraft: undefined,
             content: message.content + text,
           })),
           onReasoning: (reasoning) => updateAssistant((message) => ({ ...message, reasoning: `${message.reasoning ?? ''}${reasoning}` })),
@@ -867,6 +857,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 conversations: state.conversations.map((conversation) => conversation.id === conversationId
                   ? { ...conversation, totalCostUsd, updatedAt: Date.now(), messageCount: messages.length }
                   : conversation),
+                pendingSkills: null,
               };
             });
           },
@@ -966,6 +957,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Troca de conta: a escolha pendente é do usuário anterior e não pode
       // atravessar para a primeira conversa da conta seguinte.
       pendingEffort: null,
+      pendingSkills: null,
       error: null,
     });
   },

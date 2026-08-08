@@ -135,15 +135,15 @@ describe('motor de migração', () => {
   it('status em banco vazio: nenhuma migração aplicada', async () => {
     const run = createSqliteRunner(db);
     const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
-    expect(migrations.map((m) => m.version)).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']);
+    expect(migrations.map((m) => m.version)).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011']);
     expect(await appliedVersions(run)).toEqual(new Set());
   });
 
-  it('up em banco vazio aplica 001 a 010 e cria o schema multiusuário', async () => {
+  it('up em banco vazio aplica 001 a 011 e cria o schema multiusuário', async () => {
     const run = createSqliteRunner(db);
     const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
     const result = await migrateUp(run, migrations, legacyContext(null));
-    expect(result.applied.map((m) => m.version)).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']);
+    expect(result.applied.map((m) => m.version)).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011']);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row: { name: string }) => row.name);
     expect(tables).toContain('users');
@@ -151,6 +151,7 @@ describe('motor de migração', () => {
 
     const conversationColumns = db.prepare('PRAGMA table_info(conversations)').all().map((row: { name: string }) => row.name);
     expect(conversationColumns).toContain('user_id');
+    expect(conversationColumns).toContain('skills_json');
     // Migração 007: o CHECK de artifacts.kind passa a aceitar mindmap, e a
     // reconstrução da tabela não pode ter levado o índice junto.
     const artefatos = await run.query<Array<{ sql: string }>>(
@@ -196,7 +197,7 @@ describe('motor de migração', () => {
     const rateTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('rate_limit_counters','rate_limit_streams')").all();
     expect(rateTables).toHaveLength(2);
 
-    expect(await appliedVersions(run)).toEqual(new Set(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']));
+    expect(await appliedVersions(run)).toEqual(new Set(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011']));
   });
 
   it('up é idempotente: segunda execução não quebra nem duplica', async () => {
@@ -207,6 +208,22 @@ describe('motor de migração', () => {
     const second = await migrateUp(run, migrations, legacyContext(null));
     expect(second.applied).toEqual([]);
     expect(await tableCounts(run)).toEqual(before);
+  });
+
+  it('migração 011 converte Science legado para a seleção de skills', async () => {
+    const run = createSqliteRunner(db);
+    const migrations = await loadMigrations(MIGRATIONS_DIR, 'sqlite');
+    await migrateUp(run, migrations.filter((migration) => migration.version !== '011'), legacyContext(null));
+    const now = Date.now();
+    db.prepare('INSERT INTO users (id,created_at,updated_at) VALUES (?,?,?)').run('user-skill', now, now);
+    db.prepare(`INSERT INTO conversations
+      (id,user_id,title,provider_id,model_id,science_level,science_format,created_at,updated_at,archived)
+      VALUES (?,?,?,?,?,?,?,?,?,0)`)
+      .run('conv-skill', 'user-skill', 'Legado', 'ollama', 'llama3.2', 'advanced', 'latex', now, now);
+
+    await migrateUp(run, migrations.filter((migration) => migration.version === '011'), legacyContext(null));
+    const row = db.prepare('SELECT skills_json FROM conversations WHERE id=?').get('conv-skill') as { skills_json: string };
+    expect(JSON.parse(row.skills_json)).toEqual([{ id: 'science', settings: { format: 'latex' } }]);
   });
 
   it('migração 010 preserva anexos existentes e suas chaves estrangeiras', async () => {

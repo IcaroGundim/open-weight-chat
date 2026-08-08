@@ -14,9 +14,11 @@ import {
   type CostAnalyticsResponse,
   type Message,
   type ProviderId,
+  type SkillSelections,
   type Usage,
 } from '../../shared/types';
 import { parseEffortColumn } from '../effort';
+import { SkillSelectionsSchema } from '../../shared/types';
 import type { ChatDatabaseAdapter } from './database';
 import type {
   AttachmentRecord,
@@ -45,7 +47,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   system_prompt text, effort text, created_at bigint NOT NULL, updated_at bigint NOT NULL,
   archived boolean NOT NULL DEFAULT false,
   science_level TEXT,
-  science_format TEXT
+  science_format TEXT,
+  skills_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS search_settings (
   user_id text PRIMARY KEY, backend text NOT NULL, base_url text, api_key_cipher text,
@@ -98,6 +101,21 @@ function providerId(value: unknown): ProviderId | null {
   return parsed.success ? parsed.data : null;
 }
 
+function parseSkills(value: unknown, legacyLevel?: unknown, legacyFormat?: unknown): SkillSelections {
+  if (typeof value === 'string') {
+    try {
+      const parsed = SkillSelectionsSchema.safeParse(JSON.parse(value));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // JSON inválido cai no estado seguro abaixo.
+    }
+  }
+  if (legacyLevel != null && legacyLevel !== 'off') {
+    return [{ id: 'science', settings: { format: legacyFormat === 'latex' ? 'latex' : 'markdown' } }];
+  }
+  return [];
+}
+
 function usage(row: Row): Usage | null {
   if ([row.prompt_tokens, row.cached_tokens, row.completion_tokens, row.reasoning_tokens, row.total_tokens].every((value) => value == null)) return null;
   const promptTokens = number(row.prompt_tokens);
@@ -148,8 +166,7 @@ function conversationBase(row: Row): Omit<ConversationSummary, 'messageCount' | 
   return {
     id: text(row.id), title: nullableText(row.title), providerId: id, modelId: text(row.model_id),
     systemPrompt: nullableText(row.system_prompt), effort: parseEffortColumn(row.effort),
-      scienceLevel: (row.science_level as never) ?? 'off',
-      scienceFormat: (row.science_format as never) ?? undefined,
+    skills: parseSkills(row.skills_json, row.science_level, row.science_format),
     createdAt: number(row.created_at),
     updatedAt: number(row.updated_at), archived: bool(row.archived),
   };
@@ -203,10 +220,10 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const id = data.id ?? randomUUID();
     const now = data.createdAt ?? Date.now();
     await this.rows(
-      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,science_level,science_format,created_at,updated_at,archived)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,false) RETURNING *`,
+      `INSERT INTO conversations (id,user_id,title,provider_id,model_id,system_prompt,effort,skills_json,created_at,updated_at,archived)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,false) RETURNING *`,
       [id, userId, data.title ?? 'Nova conversa', data.providerId, data.modelId, data.systemPrompt ?? null,
-        data.effort ?? 'auto', data.scienceLevel ?? 'off', data.scienceFormat ?? null, now],
+        data.effort ?? 'auto', JSON.stringify(data.skills ?? []), now],
     );
     return await this.getConversation(userId, id) as Conversation;
   }
@@ -231,12 +248,12 @@ export class NeonChatDatabase implements ChatDatabaseAdapter {
     const current = await this.getConversation(userId, id);
     if (!current) return null;
     await this.rows(
-      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,science_level=$8,science_format=$9,archived=$10,updated_at=$11
+      `UPDATE conversations SET title=$3,provider_id=$4,model_id=$5,system_prompt=$6,effort=$7,skills_json=$8,archived=$9,updated_at=$10
         WHERE id=$1 AND user_id=$2 RETURNING *`,
       [id, userId, data.title === undefined ? current.title : data.title, data.providerId ?? current.providerId,
         data.modelId ?? current.modelId, data.systemPrompt === undefined ? current.systemPrompt : data.systemPrompt,
-        data.effort ?? current.effort, data.scienceLevel ?? current.scienceLevel ?? 'off',
-        data.scienceFormat ?? current.scienceFormat ?? null, data.archived ?? current.archived, Date.now()],
+        data.effort ?? current.effort, JSON.stringify(data.skills ?? current.skills),
+        data.archived ?? current.archived, Date.now()],
     );
     return this.getConversation(userId, id);
   }

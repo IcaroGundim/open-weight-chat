@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   updated_at INTEGER NOT NULL,
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
   science_level TEXT,
-  science_format TEXT
+  science_format TEXT,
+  skills_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS messages (

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileSpreadsheet, FileText, Paperclip, Square, X } from 'lucide-react';
 import { EffortPicker } from './EffortPicker';
-import { SciencePicker } from './SciencePicker';
+import { SkillsPicker } from './SkillsPicker';
 import { WebSearchToggle } from './WebSearchToggle';
 import { useSettingsStore } from '../store/settings';
 import { attachmentUrl, deleteAttachment, uploadAttachment } from '../api';
-import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, type Attachment, type EffortLevel, type ScienceFormat, type ScienceLevel } from '../types';
+import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, type Attachment, type EffortLevel, type SkillSelection } from '../types';
 import { useChatStore } from '../store/chat';
 
 function tamanhoLegivel(bytes: number): string {
@@ -26,9 +26,8 @@ type ComposerProps = {
    */
   effort: EffortLevel;
   onEffortChange: (effort: EffortLevel) => void;
-  scienceLevel: ScienceLevel;
-  scienceFormat: ScienceFormat;
-  onScienceChange: (level: ScienceLevel, format: ScienceFormat) => void;
+  skills: SkillSelection[];
+  onSkillsChange: (skills: SkillSelection[]) => void;
 };
 
 export function Composer({
@@ -38,9 +37,8 @@ export function Composer({
   disabled = false,
   effort,
   onEffortChange,
-  scienceLevel,
-  scienceFormat,
-  onScienceChange,
+  skills,
+  onSkillsChange,
 }: ComposerProps) {
   const [value, setValue] = useState('');
   const [anexos, setAnexos] = useState<Attachment[]>([]);
@@ -240,7 +238,7 @@ export function Composer({
             }}
           />
           <EffortPicker value={effort} onChange={onEffortChange} disabled={isStreaming} />
-          <SciencePicker level={scienceLevel} format={scienceFormat} onChange={onScienceChange} disabled={isStreaming} />
+          <SkillsPicker skills={skills} onChange={onSkillsChange} disabled={isStreaming} />
           {searchAvailable ? (
             <WebSearchToggle value={webSearch} onChange={setWebSearch} disabled={isStreaming} />
           ) : null}
